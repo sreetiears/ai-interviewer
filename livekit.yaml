@@ -1,0 +1,11 @@
+port: 7880
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  use_external_ip: false
+keys:
+  devkey: secret  # 这就是你的 API Key 和 API Secret
+logging:
+  json: false
+  level: info
+
