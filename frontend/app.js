@@ -548,7 +548,11 @@
 
     if (!phase) setText(phaseChip, '未开始');
     else if (completed) setText(phaseChip, '面试已结束');
-    else setText(phaseChip, '第 ' + (activeIndex + 1) + ' / ' + PHASES.length + ' 阶段 · ' + PHASE_LABELS[phase]);
+    else setText(phaseChip, PHASE_LABELS[phase]);
+
+    // Display-only hook: lets the redesigned shell show the current phase index
+    // and style the phase title without touching any interview logic.
+    if (document.body) document.body.dataset.phase = phase || '';
 
     if (phase && phase !== previous && !silent) {
       if (phase === 'completed') logSystem('面试流程已完成。', 'success');
@@ -1042,8 +1046,9 @@
       reportLayer.classList.add('is-open');
     });
     window.requestAnimationFrame(function () {
-      if (reportClose) {
-        try { reportClose.focus({ preventScroll: true }); } catch (error) { reportClose.focus(); }
+      const focusTarget = reportCloseBtn || reportClose;
+      if (focusTarget) {
+        try { focusTarget.focus({ preventScroll: true }); } catch (error) { focusTarget.focus(); }
       }
     });
     if (reportScroll) reportScroll.scrollTop = 0;
