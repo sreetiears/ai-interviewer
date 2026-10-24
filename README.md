@@ -138,7 +138,7 @@ python agent.py connect --room ai-room
 ├── server.py                 # 静态前端服务 + token 签发 + /api/health
 ├── frontend/
 │   ├── index.html            # 面试工作台结构（无内联脚本/样式）
-│   ├── styles.css            # 深色沉浸式主题 + 响应式 + 动效
+│   ├── styles.css            # 克制的极简深色主题 + 响应式 + 动效
 │   └── app.js                # LiveKit 连接、转写、阶段、成绩单、模式选择、演示模式
 ├── tests/
 │   ├── test_graph_nodes.py        # 状态机节点单测

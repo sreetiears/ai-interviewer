@@ -62,7 +62,7 @@
 
 原 512 行单文件拆为 `index.html` + `styles.css` + `app.js`（原生技术栈，无构建步骤）：
 
-- 视觉：深色沉浸式考场主题、渐变/光晕、阶段进度线、成绩单环形总分 + 三维条形动画；动效只用 `transform/opacity`。
+- 视觉（第二轮按"好看"需求重做）：克制的极简编辑排版——近黑石墨底、单一冷静强调色、发丝分割线、五级字号层级、面板与徽章大幅减少；大厅居中列、面试中"舞台 + 独立对话区"、成绩单大数字 + 细线维度；动效只保留发言呼吸（scale ≤1.02）、状态切换 200ms、成绩单一次性 reveal，并受 `prefers-reduced-motion` 关闭。
 - 安全：所有动态文本 `textContent`（原 `innerHTML` XSS 面消除，实测 XSS 载荷只显示为文本）；不引入第三方 CSS/字体框架。
 - 健壮性：音频 track `attach/detach` 统一清理、`pagehide` 断开、重连状态、自动播放被拦截横幅、内联错误卡片 + 重试、连接质量、麦克风静音、`aria-live`/`focus-visible`/`prefers-reduced-motion`。
 - 性能：LiveKit SDK 按需懒加载（原阻塞 CDN `<script>` 移除），SDK/CDN 不可用不白屏；DOM 引用缓存、滚动节流。
@@ -108,7 +108,7 @@ HTTP 冒烟（新一轮 `server.py`，端口 8080）：
 | `GET /%2e%2e%2fREADME.md` | 403（路径穿越被拒） |
 | `GET /nope.css` | 404 |
 
-界面证据（`docs/screenshots/`）：`after-quick-mode.png`（简单模式进行中）、`after-real-mode.png`（实战模式多题+追问）、`after-ai-thinking.png`（AI 思考中）、`after-report.png`（成绩单）、`after-mobile-390.png`（移动端）、`after-error-state.png`（未启动 LiveKit 时的内联错误+重试）。
+界面证据（`docs/screenshots/`）：`after-live-lobby.png`（大厅/模式选择）、`after-real-mode.png`（实战模式进行中）、`after-ai-thinking.png`（AI 思考中）、`after-report.png`（成绩单）、`after-mobile-390.png` / `after-mobile-report-390.png`（移动端）、`after-error-state.png`（未启动 LiveKit 时的错误态）。
 
 ---
 
