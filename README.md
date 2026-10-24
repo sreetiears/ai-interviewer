@@ -1,29 +1,50 @@
-# AI Interviewer (考研复试 AI 智能面试系统)
+# AI Interviewer（考研复试 AI 模拟面试系统）
 
-基于 **LiveKit 实时音频流** + **LangGraph 状态机** + **SiliconFlow 语音合成与识别 (STT / TTS)** 构建的考研复试模拟面试系统。
+基于 **LiveKit 实时音频流** + **LangGraph 状态机** + **SiliconFlow 语音合成与识别（STT / TTS）** 构建的考研复试模拟面试系统。浏览器打开即用，无需手工粘贴 LiveKit 密钥。
 
 ---
 
-## 🌟 核心改进与特性
+## ✨ 功能特性
 
-1. **安全配置与零硬编码**：
-   - 移除代码中所有硬编码的 API Key 与 Base URL，统一由 `.env` 及 `config.py` 管理。
-   - 提供标准环境配置模板 `.env.example`。
+### 面试流程
 
-2. **LangGraph 核心状态机驱动**：
-   - 彻底将考研复试全流程重构为 LangGraph 状态图 (`interview_graph.py`)，实现面试全生命周期管理：
-     - **自我介绍阶段 (`self_intro`)**：智能审查考生介绍完整度，未达标时引导补充，合格后自动推进；
-     - **专业知识问答 (`pro_qa`)**：出题、评估深度并决定是否一针见血追问（支持限制追问轮次）；
-     - **综合素质考察 (`compre_qa`)**：考察读研动机、软技能与抗压能力，进行场景化探底；
-     - **评分报告生成 (`report`)**：复试结束输出多维度数字化成绩单、核心不足与改进建议。
-   - 通过 `langgraph_adapter.py` 无缝对接 LiveKit Agent 流式输出。
-   - 保留向后兼容 Dify 模式（通过 `LLM_BACKEND=dify` 即可自由切换）。
+- **LangGraph 状态机驱动**四阶段面试：自我介绍 → 专业知识问答 → 综合素质考察 → 成绩报告。
+- **两种面试模式**，可在页面进入考场前选择：
 
-3. **完全免费、开箱即用的个性化定制前端**：
-   - 摆脱 livekit 官方前端需手工通过 CLI 粘贴密钥的限制；
-   - 采用 LiveKit 官方开源免费浏览器 SDK (`livekit-client` JS UMD)，纯原生 HTML5/CSS3/JS，无需复杂前端构建工具；
-   - 后端轻量级服务 (`server.py`) 提供一键 `/api/token` 免密入场接口；
-   - 现代化沉浸式深色面试考场界面：考官/考生双头像发声光圈波纹动效、面试阶段指示器（1.自我介绍 -> 2.专业问答 -> 3.综合素质 -> 4.成绩单）、实时文字记录与一键麦克风开启。
+  | 模式 | 题量 | 追问 | 适用场景 |
+  | --- | --- | --- | --- |
+  | **简单模式（quick，默认）** | 每阶段 1 道主问题 | 最多 1 次 | 演示录像、快速体验（约 5–6 轮结束） |
+  | **实战模式（real）** | 每阶段 3 道主问题 | 最多 2 次 | 完整模拟面试（约 15+ 轮） |
+
+  模式通过 `/api/token?mode=quick|real` 写入 LiveKit token metadata，Agent 入房时读取；也可用环境变量 `INTERVIEW_MODE` 设置默认值。
+- 自我介绍过短会被引导补充（有重试上限，不会卡死流程）；专业问答与综合素质阶段支持"一针见血"追问。
+- 面试结束在最后一轮作答后立即生成**多维度成绩单**（总分 + 三方向评分 + 核心不足 + 改进建议 + 结语），无需考生再说话触发。
+
+### 实时体验（前端）
+
+- **实时转写**：基于 LiveKit `TranscriptionReceived`，考生与考官分栏显示、分片增量更新、智能自动滚动（用户上翻时暂停）。
+- **阶段进度条**由后端数据通道事件驱动，随面试推进高亮；成绩单阶段自动弹出评分面板。
+- **AI 状态可视化**：思考中（三点动画）→ 发言中 → 倾听作答中；考官/考生头像发声光圈。
+- 麦克风静音开关、连接质量指示、断线重连提示、自动播放被浏览器拦截时的一键恢复、内联错误卡片 + 重试（不再使用 `alert`）。
+- 响应式布局：360 / 390 / 768 / 1440 宽度均无横向溢出；`prefers-reduced-motion`、`aria-live`、`focus-visible` 无障碍支持。
+- **演示模式**：URL 加 `?demo=1`（可叠加 `&mode=real|quick`、`&scene=report|connected`）即可在**没有 LiveKit / 没有 API Key** 的情况下完整演示整场面试，适合录屏与离线演示。
+- LiveKit 浏览器 SDK **按需懒加载**：SDK 或后端不可用时页面不会白屏，演示模式仍可用。
+
+### 工程与可靠性
+
+- **前后端数据通道协议**（LiveKit data channel，topic = `interview`，UTF-8 JSON）：
+
+  | 事件 | 载荷 | 用途 |
+  | --- | --- | --- |
+  | `status` | `{"state": "thinking"\|"listening"\|"speaking"}` | AI 状态指示 |
+  | `phase` | `{"phase": "self_intro"\|"pro_qa"\|"compre_qa"\|"completed"}` | 阶段进度条 |
+  | `report` | `{"report": {total_score, scores{...}, core_weakness, improvement_tips, closing}, "text": "纯文本成绩单"}` | 成绩单面板 |
+  | `mode` | `{"mode": "quick"\|"real"}` | 当前面试模式徽章 |
+
+- **真流式回复**：图节点通过 LangGraph `custom` stream 逐 token 推送，TTS 首字延迟显著低于"整段生成后再切块"。
+- 关闭 `preemptive_generation`，避免推测执行导致一轮作答被重复消费（面试状态机有副作用，正确性优先）。
+- 服务端加固：`ThreadingHTTPServer`、路径穿越防护（unquote + realpath + commonpath）、移除通配 CORS（可选 `ALLOWED_ORIGIN` 白名单）、安全响应头、`Content-Length`/MIME/缓存策略、`GET /api/health`、UTF-8 安全的日志（中文 Windows 控制台不再因 emoji 崩溃）、端口占用友好报错与优雅退出。
+- 测试：92 个测试（状态机节点、真实图多轮流转、两种模式题量、LangGraph↔LiveKit 适配器事件与流式、Agent 装配与模式解析、HTTP 服务端 63 项），全部离线可跑。
 
 ---
 
@@ -43,76 +64,122 @@ pip install -r requirements.txt
 
 ### 2. 配置环境变量
 
-复制 `.env.example` 为 `.env` 并填入相应密钥：
-
 ```bash
 cp .env.example .env
 ```
 
-核心配置项说明：
+核心配置项（完整列表见 `.env.example`）：
+
 ```ini
 LIVEKIT_URL=ws://127.0.0.1:7880
 LIVEKIT_API_KEY=devkey
 LIVEKIT_API_SECRET=secret
 
-# LLM 核心驱动 (langgraph 或 dify)
-LLM_BACKEND=langgraph
+# LLM 核心驱动（OpenAI 兼容服务，如 SiliconFlow / DeepSeek / Qwen）
 LLM_API_KEY=your_llm_api_key_here
 LLM_BASE_URL=https://api.siliconflow.cn/v1
 LLM_MODEL=Qwen/Qwen2.5-7B-Instruct
 
-# 语音 STT / TTS (SiliconFlow)
+# 语音 STT / TTS（SiliconFlow）
 SILICONFLOW_API_KEY=your_siliconflow_api_key_here
 SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
 STT_MODEL=FunAudioLLM/SenseVoiceSmall
 TTS_MODEL=FunAudioLLM/CosyVoice2-0.5B
 TTS_VOICE=FunAudioLLM/CosyVoice2-0.5B:alex
+
+# 面试模式与题量（可选）
+INTERVIEW_MODE=quick
+QUICK_QUESTIONS_PER_PHASE=1
+REAL_QUESTIONS_PER_PHASE=3
 ```
 
-### 3. 运行自动化测试
-
-本项目配有完整的单元测试与状态机模拟测试（无需真实联网消耗 API Key）：
+### 3. 运行测试
 
 ```bash
 pytest tests/
 ```
 
-### 4. 本地启动运行
+### 4. 本地启动
 
 #### 终端 1：启动 LiveKit Server
+
 ```bash
 livekit-server --dev
 ```
 
 #### 终端 2：启动定制前端与入场服务
+
 ```bash
 python server.py
 ```
-浏览器直接访问：`http://localhost:8080`，点击**“进入考场”**即可自动生成 Token 加入房间并开启语音。
+
+浏览器访问 `http://localhost:8080`，选择面试模式后点击**"进入考场"**，系统自动签发 token、加入房间并申请麦克风。
+
+> 没有 LiveKit / API Key 也能看效果：访问 `http://localhost:8080/?demo=1`（演示模式），或 `?demo=1&mode=real` 看实战模式。
 
 #### 终端 3：启动 AI 面试官 Agent
+
 ```bash
 python agent.py connect --room ai-room
 ```
 
+> 若 `livekit-server` 不在 PATH，可参考根目录 `install_livekit_tools.sh`（Linux/WSL）。
+
 ---
 
-## 📁 项目工程架构
+## 📁 项目结构
 
 ```
 .
-├── agent.py                 # LiveKit 语音交互 Agent 入口
-├── config.py                # 集中化配置管理 (零硬编码)
-├── interview_graph.py       # LangGraph 考研复试状态图与节点逻辑
-├── langgraph_adapter.py     # LangGraph 与 LiveKit 流式 LLM 适配器
-├── server.py                # 定制前端 HTTP 服务 & Token 自动签发 API
+├── agent.py                  # LiveKit 语音交互 Agent 入口（模式解析、事件发布）
+├── config.py                 # 集中化配置（零硬编码）
+├── interview_graph.py        # LangGraph 复试状态图、提示词、模式策略、成绩单
+├── langgraph_adapter.py      # LangGraph ↔ LiveKit LLM 适配器（流式 + UI 事件）
+├── server.py                 # 静态前端服务 + token 签发 + /api/health
 ├── frontend/
-│   └── index.html           # 定制化深色沉浸式考研复试 Web 前端
+│   ├── index.html            # 面试工作台结构（无内联脚本/样式）
+│   ├── styles.css            # 深色沉浸式主题 + 响应式 + 动效
+│   └── app.js                # LiveKit 连接、转写、阶段、成绩单、模式选择、演示模式
 ├── tests/
-│   ├── test_graph_nodes.py      # LangGraph 各阶段状态与跳转测试
-│   ├── test_graph_structure.py  # 状态图路由编译测试
-│   └── test_server.py           # Token 签发与接口测试
-├── requirements.txt         # 项目依赖库清单
-├── .env.example             # 环境变量配置模板
-└── README.md                # 项目文档
+│   ├── test_graph_nodes.py        # 状态机节点单测
+│   ├── test_graph_structure.py    # 路由与图编译
+│   ├── test_graph_flow.py         # 假 LLM 驱动完整多轮面试（含 real 模式/流式）
+│   ├── test_langgraph_adapter.py  # 适配器事件契约与 token 流
+│   ├── test_agent_stream.py       # Agent 装配、metadata 模式解析
+│   └── test_server.py             # HTTP 服务端（63 项：路由/安全/缓存/模式）
+├── docs/
+│   ├── code-review.md        # 修复前 HEAD 的代码质量审查报告
+│   ├── optimization-report.md# 本轮审查结论、修复与验证记录
+│   └── screenshots/          # 优化前后对比截图
+├── requirements.txt
+├── .env.example
+└── README.md
 ```
+
+---
+
+## 🧭 面试流程图
+
+```text
+self_intro ──合格──▶ pro_qa ──题量用尽──▶ compre_qa ──题量用尽──▶ 成绩单（同一轮生成）
+   │ 不合格且未达重试上限            ▲                    ▲
+   └──引导补充，重新判断              └──追问 / 下一题 ─────┘
+```
+
+每个用户回合进入对应节点；`quick` 模式每阶段 1 题，`real` 模式每阶段 3 题、最多 2 次追问。
+
+---
+
+## ⚠️ 安全与部署提示
+
+- `/api/token` 默认**不做身份鉴权**，只适合本机/内网演示；公网暴露前请加鉴权与限流，并把 `FRONTEND_HOST` 收紧到 `127.0.0.1`。
+- `LIVEKIT_API_KEY/SECRET` 默认 `devkey/secret` 仅供 `livekit-server --dev`；生产必须替换为强随机密钥。
+- 历史提交中曾出现明文 SiliconFlow API Key，若该 Key 仍有效请**立即吊销轮换**（详见 `docs/code-review.md` P1-8）。
+- 成绩单目前只在浏览器会话内展示，未落库；如需存档请自行接入持久化。
+
+---
+
+## 已知限制
+
+- 本环境未运行 LiveKit Server，真实音频/麦克风链路的端到端验证需在具备 LiveKit 与 API Key 的机器上完成；前端已通过模拟事件 + 演示模式验证全部 UI 行为。
+- 面试记录（`raw_scores`）为内存 checkpoint，worker 重启即丢失，多实例部署不共享状态。
