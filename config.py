@@ -26,17 +26,10 @@ class InterviewConfig:
     livekit_api_key: str = _env("LIVEKIT_API_KEY", "devkey")
     livekit_api_secret: str = _env("LIVEKIT_API_SECRET", "secret")
 
-    # Backend selection: "langgraph" | "dify"
-    llm_backend: str = _env("LLM_BACKEND", "langgraph")
-
-    # LLM Settings (for LangGraph, OpenAI-compatible)
+    # LLM Settings (LangGraph, OpenAI-compatible)
     llm_api_key: str = _env("LLM_API_KEY", _env("SILICONFLOW_API_KEY", ""))
     llm_base_url: str = _env("LLM_BASE_URL", _env("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"))
     llm_model: str = _env("LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
-
-    # Dify Settings (legacy fallback)
-    dify_api_key: str = _env("DIFY_API_KEY", "")
-    dify_base_url: str = _env("DIFY_BASE_URL", "http://127.0.0.1/v1")
 
     # Voice / SiliconFlow STT & TTS
     siliconflow_api_key: str = _env("SILICONFLOW_API_KEY", "")
@@ -56,7 +49,22 @@ class InterviewConfig:
         "OPENING_PROMPT",
         "请先向考生打招呼，并邀请对方开始自我介绍。",
     )
-    max_follow_ups: int = _env_int("MAX_FOLLOW_UPS", 1)
+    # Self-introduction gate: a too-short intro is sent back for more detail, but
+    # a bounded number of times so the interview can never stall.
+    min_self_intro_chars: int = _env_int("MIN_INTRO_CHARS", 50)
+
+    # Interview mode: "quick" (short run, for demo recordings) or "real" (a
+    # full-length interview with several questions per phase). The browser can
+    # override the mode per session through the token endpoint.
+    interview_mode: str = _env("INTERVIEW_MODE", "quick")
+    quick_questions_per_phase: int = _env_int("QUICK_QUESTIONS_PER_PHASE", 1)
+    real_questions_per_phase: int = _env_int("REAL_QUESTIONS_PER_PHASE", 3)
+    quick_max_follow_ups: int = _env_int("QUICK_MAX_FOLLOW_UPS", _env_int("MAX_FOLLOW_UPS", 1))
+    real_max_follow_ups: int = _env_int("REAL_MAX_FOLLOW_UPS", 2)
+    quick_max_intro_attempts: int = _env_int(
+        "QUICK_MAX_INTRO_ATTEMPTS", _env_int("MAX_INTRO_ATTEMPTS", 1)
+    )
+    real_max_intro_attempts: int = _env_int("REAL_MAX_INTRO_ATTEMPTS", 3)
 
 
 config = InterviewConfig()

@@ -1,26 +1,61 @@
 import asyncio
+import inspect
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 from livekit.agents import llm
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, NOT_GIVEN, NotGivenOr
 
-from interview_graph import interview_graph
+from config import config
+from interview_graph import interview_graph, normalize_interview_mode
 
 logger = logging.getLogger("langgraph-llm-adapter")
+
+InterviewEvent = dict[str, Any]
+EventSink = Callable[[InterviewEvent], Awaitable[None] | None]
 
 
 class LangGraphLLM(llm.LLM):
     """
     LiveKit LLM adapter that drives the multi-turn interview using LangGraph.
     It fulfills the livekit.agents.llm.LLM interface seamlessly.
+
+    ``on_event`` receives UI-facing events (thinking state, interview phase and the
+    final score report) so the browser can render the stepper and score card without
+    having to guess from the audio stream.
+
+    ``interview_mode`` selects the question budget: ``quick`` (short run) or
+    ``real`` (full-length interview).
     """
-    def __init__(self, thread_id: str | None = None) -> None:
+
+    def __init__(
+        self,
+        thread_id: str | None = None,
+        on_event: EventSink | None = None,
+        interview_mode: str | None = None,
+    ) -> None:
         super().__init__()
         self.thread_id = thread_id or str(uuid.uuid4())
         self.graph = interview_graph
         self.config = {"configurable": {"thread_id": self.thread_id}}
         self.api_lock = asyncio.Lock()
+        self._on_event = on_event
+        self.interview_mode = normalize_interview_mode(interview_mode or config.interview_mode)
+
+    async def emit_event(self, event: InterviewEvent) -> None:
+        """Best-effort emit; a broken UI sink must never break the interview."""
+        sink = self._on_event
+        if sink is None:
+            return
+        try:
+            result = sink(event)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.warning(
+                "Failed to publish interview event %r", event.get("type"), exc_info=True
+            )
 
     @property
     def model(self) -> str:
@@ -56,7 +91,7 @@ class LangGraphLLM(llm.LLM):
 
     def _extract_query(self, chat_ctx: llm.ChatContext) -> str:
         latest = ""
-        for msg in reversed(chat_ctx.messages):
+        for msg in reversed(chat_ctx.messages()):
             if msg.role == "user":
                 if msg.text_content:
                     return msg.text_content.strip()
@@ -86,47 +121,68 @@ class LangGraphLLMStream(llm.LLMStream):
     async def _run(self) -> None:
         # Fast interception for initial greeting
         if "打招呼" in self._query or "开始自我介绍" in self._query:
-            logger.info("⚡ LangGraphLLMStream: Intercepted opening greeting.")
-            self._event_ch.send_nowait(
-                llm.ChatChunk(
-                    id=self._request_id,
-                    delta=llm.ChoiceDelta(
-                        role="assistant",
-                        content="同学你好，欢迎参加考研复试模拟面试，请先进行1分钟左右的自我介绍。",
-                    ),
-                )
-            )
+            logger.info("LangGraphLLMStream: intercepted opening greeting.")
+            self._send_chunk("同学你好，欢迎参加考研复试模拟面试，请先进行1分钟左右的自我介绍。")
             return
 
-        async with self._graph_llm.api_lock:
-            try:
-                # Invoke the LangGraph workflow
-                input_state = {"user_query": self._query}
-                result = await self._graph_llm.graph.ainvoke(
-                    input_state,
-                    config=self._graph_llm.config,
-                )
+        graph_llm = self._graph_llm
+        await graph_llm.emit_event({"type": "status", "state": "thinking"})
 
-                reply_text = result.get("reply", "好的，请继续。")
+        async with graph_llm.api_lock:
+            streamed_any = False
+            result: dict[str, Any] = {}
+            try:
+                input_state = {
+                    "user_query": self._query,
+                    "interview_mode": graph_llm.interview_mode,
+                }
+                # "custom" carries per-token deltas written by graph nodes, so TTS can
+                # start on the first token; "values" carries the final state.
+                async for mode, chunk in graph_llm.graph.astream(
+                    input_state,
+                    config=graph_llm.config,
+                    stream_mode=["custom", "values"],
+                ):
+                    if mode == "custom":
+                        if isinstance(chunk, dict) and chunk.get("type") == "delta":
+                            text = chunk.get("text") or ""
+                            if text:
+                                streamed_any = True
+                                self._send_chunk(text)
+                    elif mode == "values" and isinstance(chunk, dict):
+                        result = chunk
+
+                reply_text = str(result.get("reply") or "好的，请继续。")
                 logger.info("[LangGraphLLMStream] Output reply: %s", reply_text[:60])
 
-                # Stream the reply in chunks for speech synthesis
-                chunk_size = 12
-                for i in range(0, len(reply_text), chunk_size):
-                    chunk = reply_text[i:i + chunk_size]
-                    self._event_ch.send_nowait(
-                        llm.ChatChunk(
-                            id=self._request_id,
-                            delta=llm.ChoiceDelta(role="assistant", content=chunk),
-                        )
-                    )
-                    await asyncio.sleep(0.01)
+                if not streamed_any:
+                    # Static replies (e.g. phase transitions) never enter the token
+                    # stream; send them whole so TTS can start immediately.
+                    self._send_chunk(reply_text)
+
+                phase = result.get("current_phase")
+                if phase:
+                    await graph_llm.emit_event({"type": "phase", "phase": phase})
+
+                report_data = result.get("report_data")
+                if isinstance(report_data, dict) and report_data:
+                    await graph_llm.emit_event({
+                        "type": "report",
+                        "report": report_data,
+                        "text": result.get("final_report", ""),
+                    })
+
+                await graph_llm.emit_event({"type": "status", "state": "speaking"})
 
             except Exception as e:
                 logger.error("[LangGraphLLMStream] Error executing graph: %s", e, exc_info=True)
-                self._event_ch.send_nowait(
-                    llm.ChatChunk(
-                        id=self._request_id,
-                        delta=llm.ChoiceDelta(role="assistant", content="系统处理出现异常，请稍后再试。"),
-                    )
-                )
+                await graph_llm.emit_event({"type": "status", "state": "listening"})
+                self._send_chunk("系统处理出现异常，请稍后再试。")
+
+    def _send_chunk(self, text: str) -> None:
+        self._event_ch.send_nowait(
+            llm.ChatChunk(
+                id=self._request_id,
+                delta=llm.ChoiceDelta(role="assistant", content=text),
+            )
+        )
