@@ -2,511 +2,416 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>考研复试模拟系统 - AI 智能考官</title>
-  <!-- LiveKit Client SDK from CDN (Official Free Open-Source JS SDK) -->
-  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.11.0/dist/livekit-client.umd.min.js"></script>
-  <style>
-    :root {
-      --bg-color: #0f172a;
-      --card-bg: #1e293b;
-      --card-border: #334155;
-      --primary: #3b82f6;
-      --primary-hover: #2563eb;
-      --danger: #ef4444;
-      --danger-hover: #dc2626;
-      --text-main: #f8fafc;
-      --text-sub: #94a3b8;
-      --accent: #10b981;
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    }
-
-    body {
-      background-color: var(--bg-color);
-      color: var(--text-main);
-      display: flex;
-      flex-direction: column;
-      min-height: 100vh;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-    }
-
-    .container {
-      width: 100%;
-      max-width: 900px;
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 16px;
-      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-    }
-
-    header {
-      padding: 24px 32px;
-      border-bottom: 1px solid var(--card-border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .brand-icon {
-      width: 40px;
-      height: 40px;
-      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-      border-radius: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 20px;
-    }
-
-    .brand-title h1 {
-      font-size: 1.25rem;
-      font-weight: 600;
-    }
-
-    .brand-title p {
-      font-size: 0.825rem;
-      color: var(--text-sub);
-    }
-
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 14px;
-      border-radius: 9999px;
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      font-size: 0.85rem;
-    }
-
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #64748b;
-      transition: background 0.3s;
-    }
-
-    .status-dot.connected {
-      background: var(--accent);
-      box-shadow: 0 0 8px var(--accent);
-    }
-
-    .status-dot.speaking {
-      background: #3b82f6;
-      box-shadow: 0 0 10px #3b82f6;
-      animation: pulse 1s infinite alternate;
-    }
-
-    @keyframes pulse {
-      from { transform: scale(0.9); opacity: 0.6; }
-      to { transform: scale(1.3); opacity: 1; }
-    }
-
-    .main-stage {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 20px;
-      padding: 32px;
-    }
-
-    @media (max-width: 768px) {
-      .main-stage {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .card {
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      border-radius: 12px;
-      padding: 24px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 260px;
-      position: relative;
-    }
-
-    .avatar-wrap {
-      position: relative;
-      margin-bottom: 16px;
-    }
-
-    .avatar {
-      width: 96px;
-      height: 96px;
-      border-radius: 50%;
-      background: #1e293b;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 42px;
-      border: 2px solid var(--card-border);
-    }
-
-    .ring {
-      position: absolute;
-      top: -8px;
-      left: -8px;
-      right: -8px;
-      bottom: -8px;
-      border-radius: 50%;
-      border: 2px solid transparent;
-      transition: border-color 0.3s, transform 0.3s;
-    }
-
-    .ring.active {
-      border-color: var(--accent);
-      animation: ripple 1.5s infinite;
-    }
-
-    @keyframes ripple {
-      0% { transform: scale(0.95); opacity: 0.8; }
-      50% { transform: scale(1.1); opacity: 0.4; }
-      100% { transform: scale(0.95); opacity: 0.8; }
-    }
-
-    .card-title {
-      font-size: 1rem;
-      font-weight: 500;
-      margin-bottom: 6px;
-    }
-
-    .card-sub {
-      font-size: 0.825rem;
-      color: var(--text-sub);
-    }
-
-    /* Process Flow Indicator */
-    .flow-indicator {
-      grid-column: 1 / -1;
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      border-radius: 10px;
-      padding: 16px 20px;
-      display: flex;
-      justify-content: space-around;
-      align-items: center;
-    }
-
-    .flow-step {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.875rem;
-      color: var(--text-sub);
-    }
-
-    .flow-step.active {
-      color: var(--primary);
-      font-weight: 600;
-    }
-
-    .step-number {
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      background: #334155;
-      color: #fff;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 0.75rem;
-    }
-
-    .flow-step.active .step-number {
-      background: var(--primary);
-    }
-
-    /* Controls */
-    .controls {
-      padding: 24px 32px;
-      background: #1e293b;
-      border-top: 1px solid var(--card-border);
-      display: flex;
-      gap: 16px;
-      justify-content: center;
-      align-items: center;
-    }
-
-    .btn {
-      padding: 12px 28px;
-      border-radius: 8px;
-      border: none;
-      font-size: 0.95rem;
-      font-weight: 500;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      transition: all 0.2s;
-    }
-
-    .btn-primary {
-      background: var(--primary);
-      color: #fff;
-    }
-
-    .btn-primary:hover {
-      background: var(--primary-hover);
-    }
-
-    .btn-danger {
-      background: var(--danger);
-      color: #fff;
-    }
-
-    .btn-danger:hover {
-      background: var(--danger-hover);
-    }
-
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    /* Transcript Box */
-    .transcript-box {
-      margin: 0 32px 32px 32px;
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      border-radius: 10px;
-      padding: 16px;
-      max-height: 180px;
-      overflow-y: auto;
-      font-size: 0.875rem;
-    }
-
-    .transcript-line {
-      margin-bottom: 8px;
-      line-height: 1.5;
-    }
-
-    .transcript-role {
-      font-weight: 600;
-      margin-right: 6px;
-    }
-    .role-interviewer { color: #60a5fa; }
-    .role-candidate { color: #34d399; }
-    .role-sys { color: #94a3b8; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#060a14">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="考研复试 AI 模拟面试系统：LangGraph 状态机驱动、LiveKit 实时语音、实时转写与智能成绩单。">
+  <title>考研复试 · AI 模拟面试工作台</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236d8bff'/%3E%3Cstop offset='1' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M6.5 14.2 16 9.3l9.5 4.9L16 19.1l-9.5-4.9Z' fill='white'/%3E%3Cpath d='M10.2 16.6v3.1c0 1.2 2.3 2.2 5.8 2.2s5.8-1 5.8-2.2v-3.1' fill='none' stroke='white' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="app.js"></script>
 </head>
-<body>
-  <div class="container">
-    <header>
+<body data-conn="idle">
+  <a class="skip-link" href="#transcriptPanel">跳到实时转写</a>
+
+  <svg class="svg-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-cap" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.8 9.6 12 4.9l9.2 4.7L12 14.3 2.8 9.6Z"/>
+        <path d="M6.4 11.7v4.1c0 1.7 2.5 3 5.6 3s5.6-1.3 5.6-3v-4.1"/>
+        <path d="M21.2 9.9v4.6"/>
+      </g>
+    </symbol>
+    <symbol id="i-person" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="8" r="3.6"/>
+        <path d="M4.5 20.4c.6-3.7 3.6-5.6 7.5-5.6s6.9 1.9 7.5 5.6"/>
+      </g>
+    </symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="2.8" width="6" height="10.4" rx="3"/>
+        <path d="M5.2 11.2a6.8 6.8 0 0 0 13.6 0"/>
+        <path d="M12 18v3.2"/>
+      </g>
+    </symbol>
+    <symbol id="i-mic-off" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 9V5.8a3 3 0 0 1 5.9-.7"/>
+        <path d="M15 11.6A6.7 6.7 0 0 1 5.2 11.2"/>
+        <path d="M18.8 11.2a6.7 6.7 0 0 1-2.2 4"/>
+        <path d="M12 18v3.2"/>
+        <path d="M3.5 3.5 20.5 20.5"/>
+      </g>
+    </symbol>
+    <symbol id="i-play" viewBox="0 0 24 24">
+      <path d="M8.4 5.4 18.6 12 8.4 18.6V5.4Z" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-exit" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14.4 3.6h4.2a2 2 0 0 1 2 2v12.8a2 2 0 0 1-2 2h-4.2"/>
+        <path d="M9.6 16.8 5 12l4.6-4.8"/>
+        <path d="M5.2 12h10.2"/>
+      </g>
+    </symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 20.2V11"/>
+        <path d="M10 20.2V4.4"/>
+        <path d="M16 20.2v-5.8"/>
+        <path d="M22 20.2H2"/>
+      </g>
+    </symbol>
+    <symbol id="i-close" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M6 6 18 18"/>
+        <path d="M18 6 6 18"/>
+      </g>
+    </symbol>
+    <symbol id="i-warning" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3.4 21 20H3l9-16.6Z"/>
+        <path d="M12 9.6v4.6"/>
+        <path d="M12 17.4h.01"/>
+      </g>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24">
+      <path d="M4.8 12.6 9.6 17.4 19.4 6.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-speaker" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 9.4v5.2h3.4l4.6 3.8V5.6L7.4 9.4H4Z"/>
+        <path d="M15.4 9a4.2 4.2 0 0 1 0 6"/>
+        <path d="M18 6.6a7.7 7.7 0 0 1 0 10.8"/>
+      </g>
+    </symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="8.6"/>
+        <path d="M12 7.4V12l3.1 1.9"/>
+      </g>
+    </symbol>
+    <symbol id="i-down" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 4.8v13.6"/>
+        <path d="M6.4 12.8 12 18.4l5.6-5.6"/>
+      </g>
+    </symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24">
+      <path d="M12 2.6 13.9 8 19.4 10l-5.5 2L12 17.4 10.1 12 4.6 10l5.5-2L12 2.6Z" fill="currentColor"/>
+      <path d="M18.6 15.4l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9.9-2.4Z" fill="currentColor" opacity=".65"/>
+    </symbol>
+    <symbol id="i-info" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="8.8"/>
+        <path d="M12 11v5.2"/>
+        <path d="M12 7.8h.01"/>
+      </g>
+    </symbol>
+  </svg>
+
+  <div class="ambient" aria-hidden="true">
+    <span class="orb orb--a"></span>
+    <span class="orb orb--b"></span>
+    <span class="orb orb--c"></span>
+    <span class="grid-lines"></span>
+    <span class="vignette"></span>
+  </div>
+
+  <div class="app-shell">
+    <header class="topbar">
       <div class="brand">
-        <div class="brand-icon">🎓</div>
-        <div class="brand-title">
-          <h1>考研复试 AI 模拟面试系统</h1>
-          <p>基于 LangGraph 状态机 · 沉浸式语音双向交互</p>
+        <div class="brand-mark" aria-hidden="true">
+          <svg class="ico"><use href="#i-cap"></use></svg>
+        </div>
+        <div class="brand-copy">
+          <h1>考研复试 · AI 模拟面试</h1>
+          <p>LangGraph 状态机 · LiveKit 实时语音 · 智能评分</p>
         </div>
       </div>
-      <div class="status-badge">
-        <div class="status-dot" id="statusDot"></div>
-        <span id="statusText">未连接</span>
+      <div class="topbar-meta">
+        <span class="demo-badge" id="demoBadge" hidden>
+          <svg class="ico" aria-hidden="true"><use href="#i-sparkle"></use></svg>
+          演示模式
+        </span>
+        <div class="quality" id="quality" data-level="0" hidden aria-label="连接质量">
+          <span class="quality-bars" aria-hidden="true">
+            <i class="q-bar"></i><i class="q-bar"></i><i class="q-bar"></i><i class="q-bar"></i>
+          </span>
+          <span class="quality-text" id="qualityText">未知</span>
+        </div>
+        <div class="session-timer" id="sessionTimer" hidden>
+          <svg class="ico" aria-hidden="true"><use href="#i-clock"></use></svg>
+          <span id="timerText">00:00</span>
+        </div>
+        <div class="status-badge" id="statusBadge" data-state="idle">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span class="status-text" id="statusText">未连接</span>
+        </div>
       </div>
     </header>
 
-    <div class="main-stage">
-      <!-- AI Interviewer Card -->
-      <div class="card">
-        <div class="avatar-wrap">
-          <div class="ring" id="aiRing"></div>
-          <div class="avatar">👨‍🏫</div>
+    <main class="workbench">
+      <section class="panel stage-panel" aria-labelledby="stageTitle">
+        <div class="panel-head">
+          <h2 id="stageTitle">面试进程</h2>
+          <span class="mode-badge" id="modeBadge" hidden>
+            <svg class="ico" aria-hidden="true"><use href="#i-sparkle"></use></svg>
+            <span id="modeBadgeText">简单模式</span>
+          </span>
+          <span class="phase-chip" id="phaseChip">未开始</span>
         </div>
-        <div class="card-title">主考官 (AI)</div>
-        <div class="card-sub" id="aiState">等待接入</div>
+
+        <div class="mode-row" id="modeRow">
+          <span class="mode-label" id="modeLabel">面试模式</span>
+          <div class="segmented" role="group" aria-labelledby="modeLabel">
+            <button class="seg-btn is-active" id="modeQuick" type="button" data-mode="quick" aria-pressed="true">
+              <span class="seg-title">简单模式</span>
+              <span class="seg-sub">题量小 · 节奏快</span>
+            </button>
+            <button class="seg-btn" id="modeReal" type="button" data-mode="real" aria-pressed="false">
+              <span class="seg-title">实战模式</span>
+              <span class="seg-sub">多题 · 多次追问</span>
+            </button>
+          </div>
+        </div>
+
+        <ol class="stepper" id="stepper" aria-label="面试阶段">
+          <li class="step" data-phase="self_intro">
+            <span class="step-dot">
+              <span class="step-num">1</span>
+              <svg class="step-check ico" aria-hidden="true"><use href="#i-check"></use></svg>
+            </span>
+            <span class="step-label">自我介绍</span>
+          </li>
+          <li class="step" data-phase="pro_qa">
+            <span class="step-dot">
+              <span class="step-num">2</span>
+              <svg class="step-check ico" aria-hidden="true"><use href="#i-check"></use></svg>
+            </span>
+            <span class="step-label">专业问答</span>
+          </li>
+          <li class="step" data-phase="compre_qa">
+            <span class="step-dot">
+              <span class="step-num">3</span>
+              <svg class="step-check ico" aria-hidden="true"><use href="#i-check"></use></svg>
+            </span>
+            <span class="step-label">综合素质</span>
+          </li>
+          <li class="step" data-phase="report">
+            <span class="step-dot">
+              <span class="step-num">4</span>
+              <svg class="step-check ico" aria-hidden="true"><use href="#i-check"></use></svg>
+            </span>
+            <span class="step-label">成绩单</span>
+          </li>
+          <span class="stepper-track" aria-hidden="true"><span class="stepper-fill" id="stepperFill"></span></span>
+        </ol>
+
+        <div class="tiles">
+          <article class="tile tile--ai" id="aiTile" data-status="idle">
+            <div class="avatar-wrap">
+              <span class="pulse-ring" aria-hidden="true"></span>
+              <span class="pulse-ring pulse-ring--slow" aria-hidden="true"></span>
+              <div class="avatar avatar--ai" aria-hidden="true">
+                <svg class="ico"><use href="#i-cap"></use></svg>
+              </div>
+            </div>
+            <div class="tile-body">
+              <h3 class="tile-name">主考官 <span class="tile-tag">AI</span></h3>
+              <p class="tile-state">
+                <span id="aiStateText">等待接入</span>
+                <span class="think-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              </p>
+              <p class="tile-sub">LangGraph 状态机 · 实时追问</p>
+            </div>
+            <div class="eq" id="aiEq" aria-hidden="true">
+              <i></i><i></i><i></i><i></i><i></i>
+            </div>
+          </article>
+
+          <article class="tile tile--user" id="userTile" data-mic="off">
+            <div class="avatar-wrap">
+              <span class="pulse-ring" aria-hidden="true"></span>
+              <span class="pulse-ring pulse-ring--slow" aria-hidden="true"></span>
+              <div class="avatar avatar--user" aria-hidden="true">
+                <svg class="ico"><use href="#i-person"></use></svg>
+              </div>
+            </div>
+            <div class="tile-body">
+              <h3 class="tile-name">考生 <span class="tile-tag">你</span></h3>
+              <p class="tile-state" id="userState">未进入考场</p>
+              <p class="tile-sub">语音作答 · 实时转写</p>
+            </div>
+            <button class="mic-toggle" id="micToggle" type="button" disabled aria-pressed="false" aria-label="麦克风静音">
+              <svg class="ico icon-on" aria-hidden="true"><use href="#i-mic"></use></svg>
+              <svg class="ico icon-off" aria-hidden="true"><use href="#i-mic-off"></use></svg>
+              <span class="mic-toggle-text" id="micToggleText">开启麦克风</span>
+            </button>
+          </article>
+        </div>
+
+        <p class="stage-hint" id="stageHint">
+          <svg class="ico" aria-hidden="true"><use href="#i-info"></use></svg>
+          <span id="stageHintText">进入考场后，AI 考官会通过语音与你完成一场完整模拟面试；请允许麦克风权限。</span>
+          <a class="hint-link" id="demoLink" href="?demo=1">体验演示模式</a>
+        </p>
+      </section>
+
+      <section class="panel transcript-panel" id="transcriptPanel" aria-labelledby="transcriptTitle">
+        <div class="panel-head">
+          <h2 id="transcriptTitle">实时转写</h2>
+          <span class="live-tag" id="liveTag" hidden><i aria-hidden="true"></i>LIVE</span>
+          <span class="transcript-count" id="transcriptCount" aria-hidden="true">0 条</span>
+        </div>
+
+        <div class="transcript-scroll" id="transcriptScroll" tabindex="0" role="region" aria-label="面试对话记录">
+          <div class="transcript" id="transcript" role="log" aria-live="polite" aria-relevant="additions text"></div>
+          <div class="transcript-empty" id="transcriptEmpty" hidden>
+            <span class="empty-mark" aria-hidden="true">
+              <svg class="ico"><use href="#i-sparkle"></use></svg>
+            </span>
+            <p class="empty-title">考场已就绪</p>
+            <p class="empty-text">点击下方「进入考场」开始模拟面试，系统会自动申请麦克风权限。</p>
+            <a class="empty-link" id="demoEmptyLink" href="?demo=1">没有后端？先体验演示模式</a>
+          </div>
+        </div>
+
+        <button class="jump-latest" id="jumpLatest" type="button" hidden>
+          <svg class="ico" aria-hidden="true"><use href="#i-down"></use></svg>
+          回到最新
+        </button>
+
+        <div class="error-card" id="errorCard" hidden role="alert">
+          <span class="error-icon" aria-hidden="true">
+            <svg class="ico"><use href="#i-warning"></use></svg>
+          </span>
+          <div class="error-body">
+            <strong id="errorTitle">连接失败</strong>
+            <p id="errorMsg"></p>
+          </div>
+          <button class="btn btn--sm btn--ghost" id="errorRetry" type="button">重试</button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="controlbar">
+      <div class="controlbar-inner">
+        <button class="icon-btn mic-btn" id="micBtn" type="button" disabled aria-pressed="false" aria-label="静音麦克风">
+          <svg class="ico icon-on" aria-hidden="true"><use href="#i-mic"></use></svg>
+          <svg class="ico icon-off" aria-hidden="true"><use href="#i-mic-off"></use></svg>
+        </button>
+        <button class="btn btn--primary" id="btnConnect" type="button">
+          <svg class="ico" aria-hidden="true"><use href="#i-play"></use></svg>
+          <span class="btn-label" id="btnConnectLabel">进入考场</span>
+        </button>
+        <button class="btn btn--ghost compact" id="btnReport" type="button" disabled>
+          <svg class="ico" aria-hidden="true"><use href="#i-chart"></use></svg>
+          <span class="btn-label">成绩单</span>
+        </button>
+        <button class="btn btn--danger compact" id="btnLeave" type="button" disabled>
+          <svg class="ico" aria-hidden="true"><use href="#i-exit"></use></svg>
+          <span class="btn-label">退出面试</span>
+        </button>
+      </div>
+      <p class="controlbar-hint" id="controlHint">准备就绪 · 进入考场后将自动申请麦克风权限</p>
+    </footer>
+  </div>
+
+  <div class="playback-banner" id="playbackBanner" hidden role="alert">
+    <svg class="ico" aria-hidden="true"><use href="#i-speaker"></use></svg>
+    <p>浏览器拦截了自动播放，点击以开启考官语音</p>
+    <button class="btn btn--sm btn--primary" id="playbackBtn" type="button">点击播放</button>
+  </div>
+
+  <div class="modal" id="reportLayer" hidden aria-hidden="true">
+    <div class="modal-backdrop" data-close-report></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="reportTitle">
+      <div class="report-head">
+        <div>
+          <p class="eyebrow">INTERVIEW REPORT</p>
+          <h2 id="reportTitle">面试成绩单</h2>
+        </div>
+        <button class="icon-btn" id="reportClose" type="button" aria-label="关闭成绩单">
+          <svg class="ico" aria-hidden="true"><use href="#i-close"></use></svg>
+        </button>
       </div>
 
-      <!-- Candidate Card -->
-      <div class="card">
-        <div class="avatar-wrap">
-          <div class="ring" id="userRing"></div>
-          <div class="avatar">🧑‍🎓</div>
+      <div class="report-scroll" id="reportScroll">
+        <div class="report-hero">
+          <div class="score-ring" id="scoreRing">
+            <svg class="ring-svg" viewBox="0 0 120 120" aria-hidden="true">
+              <defs>
+                <linearGradient id="ringGradient" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#7c9cff"></stop>
+                  <stop offset="100%" stop-color="#4dd6c1"></stop>
+                </linearGradient>
+              </defs>
+              <circle class="ring-track" cx="60" cy="60" r="52"></circle>
+              <circle class="ring-fill" id="ringFill" cx="60" cy="60" r="52"></circle>
+            </svg>
+            <div class="score-ring-text">
+              <span class="score-value" id="scoreValue">--</span>
+              <span class="score-unit">总分</span>
+            </div>
+          </div>
+          <div class="report-hero-copy">
+            <p class="report-grade" id="reportGrade">待评估</p>
+            <p class="report-summary" id="reportSummary">本场面试已完成，以下为 AI 考官依据对话内容给出的综合评估。</p>
+          </div>
         </div>
-        <div class="card-title">考生 (您)</div>
-        <div class="card-sub" id="micState">麦克风已就绪</div>
+
+        <div class="report-dims" id="reportDims">
+          <div class="dim" data-dim="profession_know">
+            <div class="dim-head">
+              <span class="dim-name">专业知识<small>理论深度与准确性</small></span>
+              <span class="dim-value" id="dimValue-profession_know">--</span>
+            </div>
+            <div class="dim-bar"><span class="dim-fill" id="dimFill-profession_know"></span></div>
+          </div>
+          <div class="dim" data-dim="exp_logic">
+            <div class="dim-head">
+              <span class="dim-name">表达逻辑<small>结构化与条理性</small></span>
+              <span class="dim-value" id="dimValue-exp_logic">--</span>
+            </div>
+            <div class="dim-bar"><span class="dim-fill" id="dimFill-exp_logic"></span></div>
+          </div>
+          <div class="dim" data-dim="comper_quality">
+            <div class="dim-head">
+              <span class="dim-name">综合素质<small>应变与沟通</small></span>
+              <span class="dim-value" id="dimValue-comper_quality">--</span>
+            </div>
+            <div class="dim-bar"><span class="dim-fill" id="dimFill-comper_quality"></span></div>
+          </div>
+        </div>
+
+        <div class="report-blocks" id="reportBlocks">
+          <div class="report-block">
+            <h3><svg class="ico" aria-hidden="true"><use href="#i-warning"></use></svg>核心不足</h3>
+            <p id="reportWeakness"></p>
+          </div>
+          <div class="report-block">
+            <h3><svg class="ico" aria-hidden="true"><use href="#i-sparkle"></use></svg>改进建议</h3>
+            <p id="reportTips"></p>
+          </div>
+          <blockquote class="report-closing" id="reportClosing"></blockquote>
+        </div>
+
+        <div class="report-raw" id="reportRaw" hidden></div>
       </div>
 
-      <!-- Interview Stage Stepper -->
-      <div class="flow-indicator">
-        <div class="flow-step active" id="step1">
-          <div class="step-number">1</div>
-          <span>自我介绍</span>
-        </div>
-        <div>→</div>
-        <div class="flow-step" id="step2">
-          <div class="step-number">2</div>
-          <span>专业问答</span>
-        </div>
-        <div>→</div>
-        <div class="flow-step" id="step3">
-          <div class="step-number">3</div>
-          <span>综合素质</span>
-        </div>
-        <div>→</div>
-        <div class="flow-step" id="step4">
-          <div class="step-number">4</div>
-          <span>综合成绩单</span>
-        </div>
+      <div class="report-foot">
+        <button class="btn btn--ghost" id="reportAgain" type="button">再练一次</button>
+        <button class="btn btn--primary" id="reportCloseBtn" type="button">返回考场</button>
       </div>
-    </div>
-
-    <!-- Transcript / Event Logs -->
-    <div class="transcript-box" id="transcriptBox">
-      <div class="transcript-line"><span class="transcript-role role-sys">[系统提示]</span> 点击“进入考场”开始模拟面试，系统将自动申请麦克风权限。</div>
-    </div>
-
-    <!-- Control Bar -->
-    <div class="controls">
-      <button class="btn btn-primary" id="btnConnect">
-        <span>🎙️ 进入考场</span>
-      </button>
-      <button class="btn btn-danger" id="btnDisconnect" disabled>
-        <span>🚪 退出面试</span>
-      </button>
     </div>
   </div>
 
-  <script>
-    let currentRoom = null;
-    const btnConnect = document.getElementById("btnConnect");
-    const btnDisconnect = document.getElementById("btnDisconnect");
-    const statusDot = document.getElementById("statusDot");
-    const statusText = document.getElementById("statusText");
-    const transcriptBox = document.getElementById("transcriptBox");
-    const aiRing = document.getElementById("aiRing");
-    const userRing = document.getElementById("userRing");
-    const aiState = document.getElementById("aiState");
+  <div class="toast-region" id="toastRegion" aria-live="assertive" aria-atomic="false"></div>
 
-    function log(role, text) {
-      const line = document.createElement("div");
-      line.className = "transcript-line";
-      let roleClass = "role-sys";
-      if (role === "考官") roleClass = "role-interviewer";
-      if (role === "考生") roleClass = "role-candidate";
-
-      line.innerHTML = `<span class="transcript-role ${roleClass}">[${role}]</span> ${text}`;
-      transcriptBox.appendChild(line);
-      transcriptBox.scrollTop = transcriptBox.scrollHeight;
-    }
-
-    async function startInterview() {
-      btnConnect.disabled = true;
-      statusText.innerText = "正在获取入场凭证...";
-
-      try {
-        // 1. Fetch token from our backend server (No manual API secret required!)
-        const res = await fetch("/api/token?room=ai-room");
-        if (!res.ok) throw new Error("获取 Token 失败");
-        const connData = await res.json();
-
-        statusText.innerText = "正在连接考场...";
-
-        // 2. Connect to LiveKit Room using open-source LiveKit JS SDK
-        const room = new LivekitClient.Room({
-          adaptiveStream: true,
-          dynacast: true,
-        });
-        currentRoom = room;
-
-        // Setup audio playback for the AI agent
-        room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
-          if (track.kind === LivekitClient.Track.Kind.Audio) {
-            const audioElement = track.attach();
-            document.body.appendChild(audioElement);
-            log("系统", "已接通考官音频通道");
-          }
-        });
-
-        // Speaking indicators
-        room.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
-          let aiSpeaking = false;
-          let userSpeaking = false;
-
-          for (const speaker of speakers) {
-            if (speaker.isLocal) {
-              userSpeaking = true;
-            } else {
-              aiSpeaking = true;
-            }
-          }
-
-          if (aiSpeaking) {
-            aiRing.classList.add("active");
-            aiState.innerText = "正在发问...";
-          } else {
-            aiRing.classList.remove("active");
-            aiState.innerText = "倾听作答中";
-          }
-
-          if (userSpeaking) {
-            userRing.classList.add("active");
-          } else {
-            userRing.classList.remove("active");
-          }
-        });
-
-        room.on(LivekitClient.RoomEvent.Disconnected, () => {
-          statusDot.className = "status-dot";
-          statusText.innerText = "已断开连接";
-          btnConnect.disabled = false;
-          btnDisconnect.disabled = true;
-          aiRing.classList.remove("active");
-          userRing.classList.remove("active");
-          aiState.innerText = "离线";
-          log("系统", "面试已结束并退出考场。");
-        });
-
-        // Connect room
-        await room.connect(connData.serverUrl, connData.token);
-        log("系统", "成功进入面试房间：" + connData.roomName);
-
-        // Publish local microphone
-        await room.localParticipant.setMicrophoneEnabled(true);
-        log("系统", "已启用麦克风，准备进行语音交互。");
-
-        statusDot.className = "status-dot connected";
-        statusText.innerText = "面试进行中";
-        btnDisconnect.disabled = false;
-
-      } catch (err) {
-        console.error(err);
-        alert("连接考场失败: " + err.message);
-        statusDot.className = "status-dot";
-        statusText.innerText = "连接失败";
-        btnConnect.disabled = false;
-      }
-    }
-
-    function stopInterview() {
-      if (currentRoom) {
-        currentRoom.disconnect();
-        currentRoom = null;
-      }
-    }
-
-    btnConnect.addEventListener("click", startInterview);
-    btnDisconnect.addEventListener("click", stopInterview);
-  </script>
+  <noscript>
+    <div class="noscript">本系统需要启用 JavaScript 才能进行模拟面试。</div>
+  </noscript>
 </body>
 </html>
