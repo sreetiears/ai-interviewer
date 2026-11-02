@@ -20,6 +20,7 @@ Environment variables:
 
 from __future__ import annotations
 
+import datetime
 import errno
 import json
 import logging
@@ -34,6 +35,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from dotenv import load_dotenv
 from livekit.api import AccessToken, VideoGrants
+
+from interview_modes import DEFAULT_MODE, MODE_NAMES, is_valid_mode, normalize_mode
 
 load_dotenv()
 
@@ -62,9 +65,15 @@ FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fronten
 # --- interview modes --------------------------------------------------------------
 # quick: short demo interview; real: full practice interview.  The selected mode is
 # baked into the token metadata so the agent can pick the matching interview graph.
-INTERVIEW_MODES = ("quick", "real")
-DEFAULT_INTERVIEW_MODE = "quick"
+# The names live in ``interview_modes.py`` so the graph and this server cannot
+# disagree about which modes exist.
+INTERVIEW_MODES = MODE_NAMES  # backward-compatible alias
+DEFAULT_INTERVIEW_MODE = DEFAULT_MODE
 INTERVIEW_MODE_ENV = "INTERVIEW_MODE"
+
+# Access tokens are short-lived: the browser fetches a fresh one for every entry,
+# so there is no reason to hand out the LiveKit default of six hours.
+TOKEN_TTL_SECONDS = _env_int("TOKEN_TTL_SECONDS", 3600)
 
 # --- token endpoint constraints -------------------------------------------------
 DEFAULT_ROOM = "ai-room"
@@ -167,19 +176,32 @@ def configure_logging(level: str | int | None = None) -> logging.Logger:
 # ---------------------------------------------------------------------------
 # Token helpers
 # ---------------------------------------------------------------------------
-def create_token(room_name: str, identity: str, mode: str = DEFAULT_INTERVIEW_MODE) -> str:
-    """Create a LiveKit JWT carrying the selected interview mode as metadata.
+def create_token(
+    room_name: str,
+    identity: str,
+    mode: str = DEFAULT_INTERVIEW_MODE,
+    session_id: str | None = None,
+    ttl_seconds: int | None = None,
+) -> str:
+    """Create a LiveKit JWT carrying the interview mode and session id.
 
-    ``mode`` is stored as ``{"interview_mode": <mode>}`` JSON so the agent can
-    read it from ``participant.metadata`` and route to the matching interview
-    graph.  The two-argument form keeps working for older callers.
+    ``mode`` and ``session_id`` are stored as JSON metadata so the agent can read
+    them from ``participant.metadata``.  The session id gives every interview its
+    own LangGraph checkpoint even when the same identity rejoins the same room.
+    The two-argument form keeps working for older callers.
     """
-    metadata = json.dumps({"interview_mode": mode}, ensure_ascii=False)
+    resolved_session = session_id or uuid.uuid4().hex
+    metadata = json.dumps(
+        {"interview_mode": mode, "session_id": resolved_session},
+        ensure_ascii=False,
+    )
+    ttl = TOKEN_TTL_SECONDS if ttl_seconds is None else int(ttl_seconds)
     token = (
         AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
         .with_identity(identity)
         .with_grants(VideoGrants(room_join=True, room=room_name))
         .with_metadata(metadata)
+        .with_ttl(datetime.timedelta(seconds=ttl))
         .to_jwt()
     )
     return token
@@ -198,11 +220,8 @@ def _normalize_interview_mode(raw: str | None) -> str | None:
 
 
 def _default_interview_mode() -> str:
-    """Return ``INTERVIEW_MODE`` when valid, else the ``quick`` default."""
-    mode = _normalize_interview_mode(os.getenv(INTERVIEW_MODE_ENV))
-    if mode in INTERVIEW_MODES:
-        return mode
-    return DEFAULT_INTERVIEW_MODE
+    """Return a valid ``INTERVIEW_MODE`` value, else the default mode."""
+    return normalize_mode(os.getenv(INTERVIEW_MODE_ENV))
 
 
 # ---------------------------------------------------------------------------
@@ -401,13 +420,13 @@ class InterviewHttpHandler(BaseHTTPRequestHandler):
 
         requested_mode = _normalize_interview_mode(params.get("mode", [""])[0])
         mode = requested_mode or _default_interview_mode()
-        if mode not in INTERVIEW_MODES:
+        if not is_valid_mode(mode):
             self._respond_json(
                 HTTPStatus.BAD_REQUEST,
                 {
                     "error": "invalid mode",
-                    "detail": "mode must be one of: %s" % ", ".join(INTERVIEW_MODES),
-                    "allowed": list(INTERVIEW_MODES),
+                    "detail": "mode must be one of: %s" % ", ".join(MODE_NAMES),
+                    "allowed": list(MODE_NAMES),
                 },
             )
             return

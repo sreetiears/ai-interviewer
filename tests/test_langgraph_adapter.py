@@ -128,16 +128,62 @@ async def test_unknown_interview_mode_falls_back_to_default():
 
 
 @pytest.mark.asyncio
-async def test_opening_greeting_bypasses_graph():
+async def test_stream_without_user_message_skips_graph():
+    """An assistant-only context must not be replayed as a candidate answer."""
     adapter = LangGraphLLM(thread_id="t-3")
     adapter.graph = FakeGraph({"reply": "不该被执行"})
+    ctx = llm.ChatContext.empty()
+    ctx.add_message(role="assistant", content="上一句考官提问")
 
-    reply = await _read_reply(
-        adapter.chat(chat_ctx=_user_chat_ctx("请先向考生打招呼，并邀请对方开始自我介绍。"))
+    reply = await _read_reply(adapter.chat(chat_ctx=ctx))
+
+    assert reply == ""
+    assert adapter.graph.calls == []
+
+
+@pytest.mark.asyncio
+async def test_report_and_phase_are_emitted_once_per_session():
+    """Checkpointed state keeps report_data; the UI must not receive it twice."""
+    report = {
+        "total_score": 88,
+        "scores": {"profession_know": 86, "exp_logic": 90, "comper_quality": 89},
+        "core_weakness": "底层原理不熟",
+        "improvement_tips": "多读源码",
+        "closing": "感谢参加",
+    }
+    events: list[dict] = []
+    adapter = LangGraphLLM(thread_id="t-5", on_event=events.append)
+    adapter.graph = FakeGraph(
+        {"reply": "面试结束。", "current_phase": "completed", "report_data": report}
     )
 
-    assert "自我介绍" in reply
-    assert adapter.graph.calls == []
+    await _read_reply(adapter.chat(chat_ctx=_user_chat_ctx("我答完了")))
+    await _read_reply(adapter.chat(chat_ctx=_user_chat_ctx("我还能再说两句吗")))
+
+    assert len([e for e in events if e.get("type") == "report"]) == 1
+    assert len([e for e in events if e.get("type") == "phase"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_falls_back_to_raw_report_text():
+    """A failed JSON parse still has final_report; the UI should get it."""
+    events: list[dict] = []
+    adapter = LangGraphLLM(thread_id="t-6", on_event=events.append)
+    adapter.graph = FakeGraph(
+        {
+            "reply": "面试结束。",
+            "current_phase": "completed",
+            "final_report": "面试结束。\n{not-json}",
+            "report_data": {},
+        }
+    )
+
+    await _read_reply(adapter.chat(chat_ctx=_user_chat_ctx("我答完了")))
+
+    reports = [e for e in events if e.get("type") == "report"]
+    assert len(reports) == 1
+    assert reports[0]["report"] == {}
+    assert "not-json" in reports[0]["text"]
 
 
 @pytest.mark.asyncio

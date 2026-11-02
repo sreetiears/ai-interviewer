@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from functools import lru_cache
 from typing import Any, Literal, TypedDict
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -10,6 +11,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
 
 from config import config
+from interview_modes import DEFAULT_MODE, normalize_mode as normalize_interview_mode
 
 logger = logging.getLogger("interview-langgraph")
 
@@ -32,6 +34,10 @@ class InterviewState(TypedDict):
     questions_asked: int
     max_follow_ups: int
     max_intro_attempts: int
+    # Main questions already asked, so the next question prompt can avoid
+    # repeating them.  Accumulated by hand because LangGraph's default channel
+    # semantics replace a plain str field.
+    asked_questions: str
     raw_scores: str
     final_report: str
     # Structured score report, consumed by the frontend score card.
@@ -144,13 +150,35 @@ FINAL_REPORT_SYSTEM = (
 )
 
 
+@lru_cache(maxsize=8)
 def _get_llm(temperature: float = 0.5) -> ChatOpenAI:
+    """Return a cached client per temperature.
+
+    Building a ``ChatOpenAI`` per call duplicated configuration and made it easy
+    for timeout/retry settings to drift between call sites.  The client is safe
+    to reuse because every node only issues stateless ``ainvoke``/``astream``
+    requests against the same endpoint.
+    """
     return ChatOpenAI(
         model=config.llm_model,
         api_key=config.llm_api_key or "sk-dummy",
         base_url=config.llm_base_url,
         temperature=temperature,
+        timeout=config.llm_timeout_seconds,
+        max_retries=config.llm_max_retries,
     )
+
+
+def _question_prompt(base: str, state: InterviewState) -> str:
+    """Append the already-asked questions to a question-generation prompt."""
+    asked = str(state.get("asked_questions", "") or "").strip()
+    if not asked:
+        return base
+    return f"{base}\n\n已经问过的问题（不要重复，也不要换汤不换药）：\n{asked}"
+
+
+def _remember_question(state: InterviewState, question: str) -> str:
+    return str(state.get("asked_questions", "") or "") + f"- {question}\n"
 
 
 def _needs_followup(judge_text: str) -> bool:
@@ -184,13 +212,7 @@ INTERVIEW_MODES: dict[str, dict[str, Any]] = {
         "max_intro_attempts": config.real_max_intro_attempts,
     },
 }
-DEFAULT_INTERVIEW_MODE = "quick"
-
-
-def normalize_interview_mode(mode: str | None) -> str:
-    """Map arbitrary user/config input onto a known interview mode."""
-    value = (mode or "").strip().lower()
-    return value if value in INTERVIEW_MODES else DEFAULT_INTERVIEW_MODE
+DEFAULT_INTERVIEW_MODE = DEFAULT_MODE
 
 
 def _interview_settings(state: InterviewState) -> dict[str, int]:
@@ -283,6 +305,7 @@ async def node_self_intro(state: InterviewState) -> dict:
             "is_answering": False,
             "intro_attempts": attempts,
             "questions_asked": 0,
+            "asked_questions": "",
             "raw_scores": state.get("raw_scores", "") + f"【自我介绍(达到重试上限)】\n{query}\n",
         }
 
@@ -293,6 +316,7 @@ async def node_self_intro(state: InterviewState) -> dict:
         "is_answering": False,
         "intro_attempts": attempts,
         "questions_asked": 0,
+        "asked_questions": "",
         "raw_scores": state.get("raw_scores", "") + f"【自我介绍(合格)】\n{query}\n",
     }
 
@@ -316,15 +340,16 @@ async def node_pro_qa(state: InterviewState) -> dict:
 
     # No pending question: ask the current main question of the phase.
     if not is_answering or not current_q:
+        prompt = (
+            "请向考生提出第一道专业课面试题。"
+            if questions_asked == 0
+            else "请向考生提出下一道专业课面试题，不要重复之前问过的问题。"
+        )
         question = await _reply_text(
             llm,
             [
                 SystemMessage(content=PRO_QUESTION_SYSTEM),
-                HumanMessage(
-                    content="请向考生提出第一道专业课面试题。"
-                    if questions_asked == 0
-                    else "请向考生提出下一道专业课面试题，不要重复之前问过的问题。"
-                ),
+                HumanMessage(content=_question_prompt(prompt, state)),
             ],
         )
         return {
@@ -333,6 +358,7 @@ async def node_pro_qa(state: InterviewState) -> dict:
             "is_answering": True,
             "follow_up_count": 0,
             "questions_asked": questions_asked + 1,
+            "asked_questions": _remember_question(state, question),
         }
 
     # Candidate has answered the question
@@ -361,6 +387,7 @@ async def node_pro_qa(state: InterviewState) -> dict:
             "follow_up_count": follow_up_count + 1,
             "is_answering": True,
             "questions_asked": questions_asked,
+            "asked_questions": _remember_question(state, followup_q),
             "raw_scores": archive,
         }
 
@@ -374,7 +401,12 @@ async def node_pro_qa(state: InterviewState) -> dict:
             llm,
             [
                 SystemMessage(content=PRO_QUESTION_SYSTEM),
-                HumanMessage(content="请向考生提出下一道专业课面试题，不要重复之前问过的问题。"),
+                HumanMessage(
+                    content=_question_prompt(
+                        "请向考生提出下一道专业课面试题，不要重复之前问过的问题。",
+                        state,
+                    )
+                ),
             ],
         )
         return {
@@ -383,6 +415,7 @@ async def node_pro_qa(state: InterviewState) -> dict:
             "is_answering": True,
             "follow_up_count": 0,
             "questions_asked": questions_asked + 1,
+            "asked_questions": _remember_question(state, next_question),
             "raw_scores": archive,
         }
 
@@ -400,6 +433,7 @@ async def node_pro_qa(state: InterviewState) -> dict:
         "is_answering": False,
         "follow_up_count": 0,
         "questions_asked": 0,
+        "asked_questions": "",
         "raw_scores": archive,
     }
 
@@ -422,15 +456,16 @@ async def node_compre_qa(state: InterviewState) -> dict:
     llm = _get_llm(temperature=0.7)
 
     if not is_answering or not current_q:
+        prompt = (
+            "提出一道关于综合素质/个人规划/团队协作的面试问题。"
+            if questions_asked == 0
+            else "请再提出一道主题不同的综合素质面试题，不要重复之前问过的话题。"
+        )
         question = await _reply_text(
             llm,
             [
                 SystemMessage(content=COMPRE_QUESTION_SYSTEM),
-                HumanMessage(
-                    content="提出一道关于综合素质/个人规划/团队协作的面试问题。"
-                    if questions_asked == 0
-                    else "请再提出一道主题不同的综合素质面试题，不要重复之前问过的话题。"
-                ),
+                HumanMessage(content=_question_prompt(prompt, state)),
             ],
         )
         return {
@@ -439,6 +474,7 @@ async def node_compre_qa(state: InterviewState) -> dict:
             "is_answering": True,
             "follow_up_count": 0,
             "questions_asked": questions_asked + 1,
+            "asked_questions": _remember_question(state, question),
         }
 
     # Candidate answered comprehensive question
@@ -466,6 +502,7 @@ async def node_compre_qa(state: InterviewState) -> dict:
             "follow_up_count": follow_up_count + 1,
             "is_answering": True,
             "questions_asked": questions_asked,
+            "asked_questions": _remember_question(state, followup_q),
             "raw_scores": archive,
         }
 
@@ -479,7 +516,12 @@ async def node_compre_qa(state: InterviewState) -> dict:
             llm,
             [
                 SystemMessage(content=COMPRE_QUESTION_SYSTEM),
-                HumanMessage(content="请再提出一道主题不同的综合素质面试题，不要重复之前问过的话题。"),
+                HumanMessage(
+                    content=_question_prompt(
+                        "请再提出一道主题不同的综合素质面试题，不要重复之前问过的话题。",
+                        state,
+                    )
+                ),
             ],
         )
         return {
@@ -488,6 +530,7 @@ async def node_compre_qa(state: InterviewState) -> dict:
             "is_answering": True,
             "follow_up_count": 0,
             "questions_asked": questions_asked + 1,
+            "asked_questions": _remember_question(state, next_question),
             "raw_scores": archive,
         }
 

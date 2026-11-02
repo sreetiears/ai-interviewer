@@ -19,6 +19,14 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        val = os.getenv(name)
+        return float(val) if val is not None else default
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class InterviewConfig:
     # LiveKit
@@ -30,6 +38,8 @@ class InterviewConfig:
     llm_api_key: str = _env("LLM_API_KEY", _env("SILICONFLOW_API_KEY", ""))
     llm_base_url: str = _env("LLM_BASE_URL", _env("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"))
     llm_model: str = _env("LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+    llm_timeout_seconds: float = _env_float("LLM_TIMEOUT_SECONDS", 30.0)
+    llm_max_retries: int = _env_int("LLM_MAX_RETRIES", 2)
 
     # Voice / SiliconFlow STT & TTS
     siliconflow_api_key: str = _env("SILICONFLOW_API_KEY", "")
@@ -45,9 +55,13 @@ class InterviewConfig:
         "AGENT_INSTRUCTIONS",
         "你是一名中文考研复试 AI 面试官。语气自然、专业、严谨且温和。严格按面试阶段引导考生。",
     )
-    opening_prompt: str = _env(
-        "OPENING_PROMPT",
-        "请先向考生打招呼，并邀请对方开始自我介绍。",
+    # Spoken verbatim by the agent when the room opens.  This used to be an
+    # instruction passed through the LLM, which forced the adapter to recognise
+    # the instruction by matching the words "打招呼" — changing this text broke
+    # the opening.  It is now a plain line of speech.
+    greeting_text: str = _env(
+        "GREETING_TEXT",
+        "同学你好，欢迎参加考研复试模拟面试，请先进行1分钟左右的自我介绍。",
     )
     # Self-introduction gate: a too-short intro is sent back for more detail, but
     # a bounded number of times so the interview can never stall.

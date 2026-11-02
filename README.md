@@ -38,13 +38,15 @@
   | --- | --- | --- |
   | `status` | `{"state": "thinking"\|"listening"\|"speaking"}` | AI 状态指示 |
   | `phase` | `{"phase": "self_intro"\|"pro_qa"\|"compre_qa"\|"completed"}` | 阶段进度条 |
-  | `report` | `{"report": {total_score, scores{...}, core_weakness, improvement_tips, closing}, "text": "纯文本成绩单"}` | 成绩单面板 |
+  | `report` | `{"report": {total_score, scores{...}, core_weakness, improvement_tips, closing}, "text": "纯文本成绩单"}` | 成绩单面板（每场只发一次） |
   | `mode` | `{"mode": "quick"\|"real"}` | 当前面试模式徽章 |
 
+- **每场面试独立存档**：`/api/token` 为每个 token 生成一次性 `session_id`，写入 LiveKit metadata；Agent 用它作为 LangGraph 的 `thread_id`。同一考生重进考场不会继承上一场的状态。
 - **真流式回复**：图节点通过 LangGraph `custom` stream 逐 token 推送，TTS 首字延迟显著低于"整段生成后再切块"。
 - 关闭 `preemptive_generation`，避免推测执行导致一轮作答被重复消费（面试状态机有副作用，正确性优先）。
-- 服务端加固：`ThreadingHTTPServer`、路径穿越防护（unquote + realpath + commonpath）、移除通配 CORS（可选 `ALLOWED_ORIGIN` 白名单）、安全响应头、`Content-Length`/MIME/缓存策略、`GET /api/health`、UTF-8 安全的日志（中文 Windows 控制台不再因 emoji 崩溃）、端口占用友好报错与优雅退出。
-- 测试：92 个测试（状态机节点、真实图多轮流转、两种模式题量、LangGraph↔LiveKit 适配器事件与流式、Agent 装配与模式解析、HTTP 服务端 63 项），全部离线可跑。
+- 出题时会带上"已经问过的问题"，降低 real 模式中重复出题的概率。
+- 服务端加固：`ThreadingHTTPServer`、路径穿越防护（unquote + realpath + commonpath）、移除通配 CORS（可选 `ALLOWED_ORIGIN` 白名单）、安全响应头、`Content-Length`/MIME/缓存策略、`GET /api/health`、token 默认 1 小时 TTL、UTF-8 安全的日志（中文 Windows 控制台不再因 emoji 崩溃）、端口占用友好报错与优雅退出。
+- 测试：105 个测试（状态机节点、真实图多轮流转、两种模式题量、LangGraph↔LiveKit 适配器事件与流式、Agent 装配与模式解析、HTTP 服务端 65 项、模式常量一致性），全部离线可跑。
 
 ---
 
@@ -79,6 +81,8 @@ LIVEKIT_API_SECRET=secret
 LLM_API_KEY=your_llm_api_key_here
 LLM_BASE_URL=https://api.siliconflow.cn/v1
 LLM_MODEL=Qwen/Qwen2.5-7B-Instruct
+LLM_TIMEOUT_SECONDS=30
+LLM_MAX_RETRIES=2
 
 # 语音 STT / TTS（SiliconFlow）
 SILICONFLOW_API_KEY=your_siliconflow_api_key_here
@@ -91,12 +95,16 @@ TTS_VOICE=FunAudioLLM/CosyVoice2-0.5B:alex
 INTERVIEW_MODE=quick
 QUICK_QUESTIONS_PER_PHASE=1
 REAL_QUESTIONS_PER_PHASE=3
+TOKEN_TTL_SECONDS=3600
+
+# 开场白（直接说出的台词，不是给模型的指令）
+# GREETING_TEXT=同学你好，欢迎参加考研复试模拟面试，请先进行1分钟左右的自我介绍。
 ```
 
 ### 3. 运行测试
 
 ```bash
-pytest tests/
+python -m pytest tests/
 ```
 
 ### 4. 本地启动
@@ -133,6 +141,7 @@ python agent.py connect --room ai-room
 .
 ├── agent.py                  # LiveKit 语音交互 Agent 入口（模式解析、事件发布）
 ├── config.py                 # 集中化配置（零硬编码）
+├── interview_modes.py        # quick/real 的唯一事实来源（零第三方依赖）
 ├── interview_graph.py        # LangGraph 复试状态图、提示词、模式策略、成绩单
 ├── langgraph_adapter.py      # LangGraph ↔ LiveKit LLM 适配器（流式 + UI 事件）
 ├── server.py                 # 静态前端服务 + token 签发 + /api/health
@@ -145,16 +154,42 @@ python agent.py connect --room ai-room
 │   ├── test_graph_structure.py    # 路由与图编译
 │   ├── test_graph_flow.py         # 假 LLM 驱动完整多轮面试（含 real 模式/流式）
 │   ├── test_langgraph_adapter.py  # 适配器事件契约与 token 流
-│   ├── test_agent_stream.py       # Agent 装配、metadata 模式解析
-│   └── test_server.py             # HTTP 服务端（63 项：路由/安全/缓存/模式）
+│   ├── test_agent_stream.py       # Agent 装配、metadata 模式/会话解析
+│   ├── test_interview_modes.py    # 模式常量唯一来源
+│   └── test_server.py             # HTTP 服务端（65 项：路由/安全/缓存/模式）
 ├── docs/
-│   ├── code-review.md        # 修复前 HEAD 的代码质量审查报告
-│   ├── optimization-report.md# 本轮审查结论、修复与验证记录
+│   ├── tutorial/             # 从零手搓本项目的教学文档（10 章）
+│   ├── reports/              # 架构审查 + 多模态替代方案报告
+│   ├── code-review.md        # 修复前 HEAD 的代码质量审查报告（历史）
+│   ├── optimization-report.md# 上一轮审查结论与修复记录（历史）
 │   └── screenshots/          # 优化前后对比截图
 ├── requirements.txt
 ├── .env.example
 └── README.md
 ```
+
+---
+
+## 📚 教学文档
+
+想从零理解或重写这个项目，从这里开始：
+
+- [教学文档总览](docs/tutorial/README.md)：学习路线、三条数据流、术语表。
+- [第 1 章：心智模型](docs/tutorial/01-mental-model.md)
+- [第 2 章：搭骨架与配置](docs/tutorial/02-scaffold-and-config.md)
+- [第 3 章：Token 服务与静态文件](docs/tutorial/03-token-server.md)
+- [第 4 章：面试状态机](docs/tutorial/04-interview-graph.md)
+- [第 5 章：LangGraph ↔ LiveKit 适配器](docs/tutorial/05-livekit-adapter.md)
+- [第 6 章：语音会话入口](docs/tutorial/06-agent-session.md)
+- [第 7 章：浏览器工作台](docs/tutorial/07-frontend.md)
+- [第 8 章：测试与调试](docs/tutorial/08-testing-debugging.md)
+- [第 9 章：从空目录手搓一遍](docs/tutorial/09-build-from-scratch.md)
+- [第 10 章：多模态升级](docs/tutorial/10-multimodal-upgrade.md)
+
+配套报告：
+
+- [架构审查与优化报告](docs/reports/architecture-review.md)
+- [多模态替代方案报告（未应用）](docs/reports/multimodal-alternatives.md)
 
 ---
 
@@ -174,6 +209,7 @@ self_intro ──合格──▶ pro_qa ──题量用尽──▶ compre_qa �
 
 - `/api/token` 默认**不做身份鉴权**，只适合本机/内网演示；公网暴露前请加鉴权与限流，并把 `FRONTEND_HOST` 收紧到 `127.0.0.1`。
 - `LIVEKIT_API_KEY/SECRET` 默认 `devkey/secret` 仅供 `livekit-server --dev`；生产必须替换为强随机密钥。
+- token 默认 1 小时过期（`TOKEN_TTL_SECONDS`），每次进入考场都会重新签发；不要把 TTL 调得过长。
 - 历史提交中曾出现明文 SiliconFlow API Key，若该 Key 仍有效请**立即吊销轮换**（详见 `docs/code-review.md` P1-8）。
 - 成绩单目前只在浏览器会话内展示，未落库；如需存档请自行接入持久化。
 
@@ -182,4 +218,6 @@ self_intro ──合格──▶ pro_qa ──题量用尽──▶ compre_qa �
 ## 已知限制
 
 - 本环境未运行 LiveKit Server，真实音频/麦克风链路的端到端验证需在具备 LiveKit 与 API Key 的机器上完成；前端已通过模拟事件 + 演示模式验证全部 UI 行为。
-- 面试记录（`raw_scores`）为内存 checkpoint，worker 重启即丢失，多实例部署不共享状态。
+- 面试记录（`raw_scores`）与 LangGraph checkpoint 为进程内内存，worker 重启即丢失，多实例部署不共享状态。生产建议换 Postgres/Redis checkpointer。
+- 当前只处理文本语义：STT 之后的语气、停顿、表情全部丢失；多模态升级方案见 [docs/reports/multimodal-alternatives.md](docs/reports/multimodal-alternatives.md)（未应用）。
+- 前端为单文件 IIFE（约 1900 行），刻意保持零构建；继续扩张功能时建议拆 ES modules。

@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import os
@@ -17,7 +16,7 @@ from livekit.plugins.openai import tts as openai_tts_impl
 # Load environment configuration
 load_dotenv()
 from config import config
-from interview_graph import normalize_interview_mode
+from interview_modes import normalize_mode as normalize_interview_mode
 from langgraph_adapter import LangGraphLLM
 
 logging.basicConfig(
@@ -35,6 +34,36 @@ def _safe_identity(identity: str) -> str:
     return normalized or f"candidate-{uuid.uuid4().hex[:6]}"
 
 
+SESSION_ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,128}$")
+
+
+def _participant_metadata(participant: Any) -> dict[str, Any]:
+    raw_metadata = getattr(participant, "metadata", "") or ""
+    try:
+        payload = json.loads(raw_metadata)
+    except (TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _resolve_session_id(participant: Any) -> str:
+    """Read the per-token session id from participant metadata.
+
+    The web server signs a fresh id into every access token.  Using it as the
+    LangGraph ``thread_id`` gives each interview its own checkpoint, so two
+    candidates in the same room — or a candidate who rejoins with a new token —
+    can never inherit another session's phase, transcript or final report.
+    Empty means "old token / no id", and the caller falls back to room:identity.
+    """
+    payload = _participant_metadata(participant)
+    candidate = payload.get("session_id")
+    if isinstance(candidate, str):
+        candidate = candidate.strip()
+        if SESSION_ID_RE.fullmatch(candidate):
+            return candidate
+    return ""
+
+
 def _resolve_interview_mode(participant: Any) -> str:
     """Read the interview mode the browser selected from the participant metadata.
 
@@ -42,13 +71,9 @@ def _resolve_interview_mode(participant: Any) -> str:
     LiveKit exposes that as ``participant.metadata``. Anything malformed falls back
     to the configured default so a bad client cannot break its own interview.
     """
-    raw_metadata = getattr(participant, "metadata", "") or ""
+    payload = _participant_metadata(participant)
     mode: Any = None
-    try:
-        payload = json.loads(raw_metadata)
-    except (TypeError, ValueError):
-        payload = None
-    if isinstance(payload, dict):
+    if payload:
         for key in ("interview_mode", "mode"):
             if payload.get(key):
                 mode = payload[key]
@@ -78,12 +103,14 @@ def _build_session(
     participant_identity: str,
     on_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     interview_mode: str | None = None,
+    thread_id: str | None = None,
 ) -> tuple[voice.Agent, voice.AgentSession]:
     user_id = _safe_identity(participant_identity)
     resolved_mode = normalize_interview_mode(interview_mode or config.interview_mode)
+    resolved_thread = thread_id or user_id
     logger.info(
         "Initializing LangGraph interview session for thread: %s (mode: %s)",
-        user_id,
+        resolved_thread,
         resolved_mode,
     )
 
@@ -103,7 +130,7 @@ def _build_session(
             language=config.stt_language,
         ),
         llm=LangGraphLLM(
-            thread_id=user_id,
+            thread_id=resolved_thread,
             on_event=on_event,
             interview_mode=resolved_mode,
         ),
@@ -126,8 +153,13 @@ async def entrypoint(ctx: JobContext) -> None:
     participant = await ctx.wait_for_participant()
     participant_identity = participant.identity or f"candidate-{uuid.uuid4().hex[:6]}"
     interview_mode = _resolve_interview_mode(participant)
+    session_id = _resolve_session_id(participant)
+    thread_id = session_id or f"{ctx.room.name}:{_safe_identity(participant_identity)}"
     logger.info(
-        "Participant joined: %s (interview mode: %s)", participant_identity, interview_mode
+        "Participant joined: %s (interview mode: %s, thread: %s)",
+        participant_identity,
+        interview_mode,
+        thread_id,
     )
 
     async def publish_event(event: dict[str, Any]) -> None:
@@ -146,6 +178,7 @@ async def entrypoint(ctx: JobContext) -> None:
         participant_identity,
         on_event=publish_event,
         interview_mode=interview_mode,
+        thread_id=thread_id,
     )
 
     logger.info("Starting voice session")
@@ -156,13 +189,12 @@ async def entrypoint(ctx: JobContext) -> None:
     await publish_event({"type": "mode", "mode": interview_mode})
     await publish_event({"type": "phase", "phase": "self_intro"})
 
-    await asyncio.sleep(1)
-    logger.info("Triggering opening message...")
-    session.generate_reply(
-        user_input=config.opening_prompt,
-        allow_interruptions=False,
-        input_modality="text",
-    )
+    # Speak the greeting directly.  Routing it through the graph used to require
+    # matching the instruction text ("打招呼") inside the LLM adapter, so editing
+    # GREETING_TEXT silently broke the opening.  ``say`` also keeps the greeting
+    # out of the interview state machine, where it is not a candidate answer.
+    logger.info("Speaking opening greeting")
+    session.say(config.greeting_text, allow_interruptions=False)
 
 
 if __name__ == "__main__":

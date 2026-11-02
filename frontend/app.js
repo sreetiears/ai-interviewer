@@ -1882,7 +1882,7 @@
       const viewport = window.innerWidth;
       const lines = [];
       lines.push('vw=' + viewport + ' docSW=' + document.documentElement.scrollWidth + ' bodySW=' + document.body.scrollWidth);
-      ['.app-shell', '.topbar', '.topbar-meta', '.workbench', '.stage-panel', '.transcript-panel', '.controlbar', '.controlbar-inner', '.stepper', '.tiles'].forEach(function (selector) {
+      ['.shell', '.topbar', '.topbar-meta', '.session', '.session-head', '.session-body', '.stage', '.conversation', '.controlbar', '.controlbar-inner', '.stepper'].forEach(function (selector) {
         const node = document.querySelector(selector);
         if (!node) return;
         const rect = node.getBoundingClientRect();

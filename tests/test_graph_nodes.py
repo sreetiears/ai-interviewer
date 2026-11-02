@@ -220,6 +220,33 @@ async def test_real_mode_asks_multiple_pro_questions():
 
 
 @pytest.mark.asyncio
+async def test_next_question_prompt_includes_questions_already_asked():
+    mock_llm = MagicMock()
+    mock_llm.ainvoke = AsyncMock(
+        side_effect=[AIMessage(content="不需要"), AIMessage(content="第二道专业课问题。")]
+    )
+
+    with patch("interview_graph._get_llm", return_value=mock_llm):
+        state = {
+            "current_phase": "pro_qa",
+            "interview_mode": "real",
+            "is_answering": True,
+            "question_pro": "第一道专业课问题。",
+            "user_query": "我的回答。",
+            "follow_up_count": 0,
+            "questions_asked": 1,
+            "asked_questions": "- 第一道专业课问题。\n",
+            "raw_scores": "",
+        }
+        result = await node_pro_qa(state)
+
+    question_prompt = mock_llm.ainvoke.await_args_list[1].args[0][1].content
+    assert "第一道专业课问题" in question_prompt
+    assert "第二道专业课问题" in result["asked_questions"]
+    assert "第一道专业课问题" in result["asked_questions"]
+
+
+@pytest.mark.asyncio
 async def test_quick_mode_advances_after_first_answer():
     mock_llm = MagicMock()
     mock_llm.ainvoke = AsyncMock(

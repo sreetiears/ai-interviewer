@@ -8,7 +8,8 @@ from livekit.agents import llm
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, NOT_GIVEN, NotGivenOr
 
 from config import config
-from interview_graph import interview_graph, normalize_interview_mode
+from interview_graph import interview_graph
+from interview_modes import normalize_mode as normalize_interview_mode
 
 logger = logging.getLogger("langgraph-llm-adapter")
 
@@ -42,6 +43,12 @@ class LangGraphLLM(llm.LLM):
         self.api_lock = asyncio.Lock()
         self._on_event = on_event
         self.interview_mode = normalize_interview_mode(interview_mode or config.interview_mode)
+        # The graph checkpoints state between turns, so ``report_data`` and
+        # ``current_phase`` survive into later turns.  Remember what the UI has
+        # already received or the closing report would pop up again every time
+        # the candidate says something after the interview ended.
+        self._last_phase: str | None = None
+        self._report_emitted = False
 
     async def emit_event(self, event: InterviewEvent) -> None:
         """Best-effort emit; a broken UI sink must never break the interview."""
@@ -56,6 +63,20 @@ class LangGraphLLM(llm.LLM):
             logger.warning(
                 "Failed to publish interview event %r", event.get("type"), exc_info=True
             )
+
+    def should_emit_phase(self, phase: str) -> bool:
+        """True the first time a phase is observed in this session."""
+        if not phase or phase == self._last_phase:
+            return False
+        self._last_phase = phase
+        return True
+
+    def should_emit_report(self) -> bool:
+        """True at most once per session; checkpoints retain the report forever."""
+        if self._report_emitted:
+            return False
+        self._report_emitted = True
+        return True
 
     @property
     def model(self) -> str:
@@ -90,17 +111,21 @@ class LangGraphLLM(llm.LLM):
         return None
 
     def _extract_query(self, chat_ctx: llm.ChatContext) -> str:
-        latest = ""
+        """Return the latest user utterance, or ``""`` when there is none.
+
+        Never fall back to an assistant message: the graph treats its input as a
+        candidate answer, so feeding it the examiner's previous question would
+        advance the interview state with the wrong speaker.
+        """
         for msg in reversed(chat_ctx.messages()):
-            if msg.role == "user":
-                if msg.text_content:
-                    return msg.text_content.strip()
-                parts = [p.strip() for p in msg.content if isinstance(p, str) and p.strip()]
-                if parts:
-                    return "\n".join(parts).strip()
-            elif msg.role == "assistant" and not latest:
-                latest = msg.text_content or ""
-        return latest or "请开始本轮面试。"
+            if msg.role != "user":
+                continue
+            if msg.text_content:
+                return msg.text_content.strip()
+            parts = [p.strip() for p in msg.content if isinstance(p, str) and p.strip()]
+            if parts:
+                return "\n".join(parts).strip()
+        return ""
 
 
 class LangGraphLLMStream(llm.LLMStream):
@@ -119,10 +144,11 @@ class LangGraphLLMStream(llm.LLMStream):
         self._request_id = uuid.uuid4().hex
 
     async def _run(self) -> None:
-        # Fast interception for initial greeting
-        if "打招呼" in self._query or "开始自我介绍" in self._query:
-            logger.info("LangGraphLLMStream: intercepted opening greeting.")
-            self._send_chunk("同学你好，欢迎参加考研复试模拟面试，请先进行1分钟左右的自我介绍。")
+        if not self._query:
+            # LiveKit can ask for a reply without a user message (for example an
+            # empty turn trigger).  There is nothing to answer, and inventing a
+            # query would corrupt the interview state.
+            logger.info("LangGraphLLMStream: no user utterance, skipping graph")
             return
 
         graph_llm = self._graph_llm
@@ -161,15 +187,20 @@ class LangGraphLLMStream(llm.LLMStream):
                     self._send_chunk(reply_text)
 
                 phase = result.get("current_phase")
-                if phase:
+                if graph_llm.should_emit_phase(phase):
                     await graph_llm.emit_event({"type": "phase", "phase": phase})
 
                 report_data = result.get("report_data")
-                if isinstance(report_data, dict) and report_data:
+                final_report = str(result.get("final_report") or "")
+                has_structured_report = isinstance(report_data, dict) and bool(report_data)
+                # Even when the model returned unparseable JSON, the graph keeps
+                # the raw text in ``final_report``.  Sending it lets the browser
+                # show the raw report instead of silently showing nothing.
+                if (has_structured_report or final_report) and graph_llm.should_emit_report():
                     await graph_llm.emit_event({
                         "type": "report",
-                        "report": report_data,
-                        "text": result.get("final_report", ""),
+                        "report": report_data if has_structured_report else {},
+                        "text": final_report,
                     })
 
                 await graph_llm.emit_event({"type": "status", "state": "speaking"})
