@@ -78,6 +78,11 @@ class InterviewConfig:
     real_max_intro_attempts: int = _env_int("REAL_MAX_INTRO_ATTEMPTS", 3)
 
 
+def listen_bakeoff_dirs() -> tuple[str, str]:
+    """离线横评的录音目录和记录目录。都由本机配置给出，不指向仓库内。"""
+    return _env("LISTEN_BAKEOFF_AUDIO_DIR"), _env("LISTEN_BAKEOFF_RECORD_DIR")
+
+
 def delivery_metrics_enabled() -> bool:
     """成绩单是否读入表达特征。本地默认打开，评测时可关掉。"""
     raw = os.getenv("DELIVERY_METRICS", "1").strip().lower()
