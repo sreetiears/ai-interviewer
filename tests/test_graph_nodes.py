@@ -14,7 +14,7 @@ from interview_graph import (
 @pytest.mark.asyncio
 async def test_self_intro_unqualified_flow():
     mock_llm = MagicMock()
-    # Judge returns 不合格, tutor returns guidance
+    # 评判返回“不合格”，辅导返回引导语
     mock_llm.ainvoke = AsyncMock(side_effect=[
         AIMessage(content="不合格"),
         AIMessage(content="请补充本科经历与报考动机。"),
@@ -104,7 +104,7 @@ async def test_final_report_generation():
 
 @pytest.mark.asyncio
 async def test_compre_final_answer_generates_report_in_same_turn():
-    """The report must be produced on the last answer, not one silent turn later."""
+    """成绩单必须在最后一次回答时生成，而不是再空等一轮。"""
     mock_llm = MagicMock()
     mock_json = (
         '{"total_score": 81, "scores": {"profession_know": 78, "exp_logic": 84, "comper_quality": 82}, '
@@ -148,12 +148,121 @@ def test_build_report_payload_clamps_and_defaults_scores():
     )
 
     assert payload["total_score"] == 86
-    assert payload["scores"]["profession_know"] == 100  # clamped to 100
-    assert payload["scores"]["exp_logic"] == 88  # numeric string accepted
-    assert payload["scores"]["comper_quality"] == 85  # None -> default
+    assert payload["scores"]["profession_know"] == 100  # 截断到 100
+    assert payload["scores"]["exp_logic"] == 88  # 接受数字字符串
+    assert payload["scores"]["comper_quality"] == 85  # None 时用默认值
     assert payload["core_weakness"]
     assert payload["improvement_tips"]
     assert payload["closing"]
+
+
+def test_report_text_names_expression_logic_and_keeps_the_note():
+    from interview_graph import _format_report_text
+
+    payload = _build_report_payload(
+        {
+            "total_score": 80,
+            "scores": {"profession_know": 70, "exp_logic": 75, "comper_quality": 80},
+            "exp_logic_note": "停顿很少。",
+            "core_weakness": "例子少",
+            "improvement_tips": "补充例子",
+            "interviewer_closing": "辛苦了",
+        }
+    )
+    payload["delivery"] = {
+        "measured_turns": 1,
+        "missing_turns": 1,
+        "display": {
+            "duration": "3.4 秒",
+            "speech_rate": "2.0 字/秒",
+            "pause_ratio": "11.8%",
+            "mean_pause": "0.4 秒",
+            "pitch_std": "0.0 赫兹",
+            "intensity": "77.0 分贝",
+            "filler_ratio": "16.7%",
+        },
+    }
+
+    assert payload["exp_logic_note"] == "停顿很少。"
+    text = _format_report_text(payload)
+    assert "表达逻辑：75分" in text
+    assert "逻辑表达" not in text
+    assert "表达说明：停顿很少。" in text
+    assert "语速：2.0 字/秒" in text
+    assert "缺测：1 轮" in text
+
+
+@pytest.mark.asyncio
+async def test_report_uses_measured_delivery_instead_of_model_numbers(monkeypatch):
+    monkeypatch.setenv("DELIVERY_METRICS", "1")
+    mock_llm = MagicMock()
+    mock_json = (
+        '{"total_score": 80, "scores": {"profession_know": 70, "exp_logic": 75, "comper_quality": 80}, '
+        '"core_weakness": "例子少", "improvement_tips": "补充例子", "interviewer_closing": "辛苦了", '
+        '"exp_logic_note": "语速稳定。"}'
+    )
+    seen = {}
+
+    async def _invoke(messages):
+        seen["messages"] = messages
+        return AIMessage(content=mock_json)
+
+    mock_llm.ainvoke = _invoke
+    turn = {
+        "missing": False,
+        "duration_seconds": 3.4,
+        "voiced_seconds": 3.0,
+        "pause_seconds": 0.4,
+        "pause_count": 1,
+        "speech_rate_chars_per_second": 2.0,
+        "pause_ratio": 0.4 / 3.4,
+        "mean_pause_seconds": 0.4,
+        "pitch_std_hz": 0.0,
+        "intensity_db": 77.0,
+        "filler_ratio": 1 / 6,
+        "transcript_chars": 6,
+        "filler_chars": 1,
+    }
+
+    with patch("interview_graph._get_llm", return_value=mock_llm):
+        result = await node_report({"raw_scores": "【记录】", "delivery_turns": [turn]})
+
+    human = seen["messages"][1].content
+    assert "语速 2.0 字/秒" in human
+    assert result["report_data"]["delivery"]["speech_rate_chars_per_second"] == 2.0
+    assert result["report_data"]["exp_logic_note"] == "语速稳定。"
+    assert "表达逻辑" in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_report_ignores_delivery_when_the_switch_is_off(monkeypatch):
+    monkeypatch.setenv("DELIVERY_METRICS", "0")
+    mock_llm = MagicMock()
+    mock_json = (
+        '{"total_score": 80, "scores": {"profession_know": 70, "exp_logic": 75, "comper_quality": 80}, '
+        '"core_weakness": "例子少", "improvement_tips": "补充例子", "interviewer_closing": "辛苦了"}'
+    )
+    seen = {}
+
+    async def _invoke(messages):
+        seen["messages"] = messages
+        return AIMessage(content=mock_json)
+
+    mock_llm.ainvoke = _invoke
+
+    with patch("interview_graph._get_llm", return_value=mock_llm):
+        result = await node_report(
+            {
+                "raw_scores": "【记录】",
+                "delivery_turns": [{"missing": False, "speech_rate_chars_per_second": 2.0}],
+            }
+        )
+
+    assert seen["messages"][1].content == (
+        "这是该考生本场面试的完整文字记录：\n【记录】\n请严格按 JSON 格式输出最终评分报告。"
+    )
+    assert "delivery" not in result["report_data"]
+    assert "字/秒" not in result["final_report"]
 
 
 def test_build_report_payload_rejects_missing_total_score():
@@ -182,7 +291,7 @@ async def test_self_intro_retry_cap_forces_advance():
     with patch("interview_graph._get_llm", return_value=mock_llm):
         state = {
             "user_query": "我叫张三。",
-            "intro_attempts": 1,  # quick mode allows exactly one retry
+            "intro_attempts": 1,  # quick 模式只允许重试一次
         }
         result = await node_self_intro(state)
 
@@ -212,7 +321,7 @@ async def test_real_mode_asks_multiple_pro_questions():
         }
         result = await node_pro_qa(state)
 
-    assert result.get("current_phase", "pro_qa") == "pro_qa"  # still in the professional phase
+    assert result.get("current_phase", "pro_qa") == "pro_qa"  # 仍处在专业课阶段
     assert result["question_pro"] == "第二道专业课问题。"
     assert result["questions_asked"] == 2
     assert result["is_answering"] is True

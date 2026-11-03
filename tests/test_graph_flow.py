@@ -1,8 +1,7 @@
-"""End-to-end state machine flow with a deterministic fake LLM.
+"""用确定性的假大模型做端到端状态机流程测试。
 
-The graph is compiled over a MemorySaver checkpointer, so these tests drive a
-whole interview turn by turn and assert the phase transitions and that the final
-score report is produced on the last answer.
+图在 MemorySaver 检查点之上编译，因此这些测试逐轮驱动一整场面试，
+并断言阶段切换，以及最终成绩单在最后一次回答时生成。
 """
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -38,9 +37,12 @@ def _fake_llm_response(messages) -> AIMessage:
         COMPRE_JUDGE_SYSTEM: "不需要",
         FINAL_REPORT_SYSTEM: REPORT_JSON,
     }
-    if system_prompt not in replies:
-        raise AssertionError(f"Unexpected prompt: {system_prompt[:40]}")
-    return AIMessage(content=replies[system_prompt])
+    if system_prompt in replies:
+        return AIMessage(content=replies[system_prompt])
+    # 打开表达特征时，成绩单系统提示词在原文后追加约束。
+    if system_prompt.startswith(FINAL_REPORT_SYSTEM):
+        return AIMessage(content=REPORT_JSON)
+    raise AssertionError(f"Unexpected prompt: {system_prompt[:40]}")
 
 
 def _mock_llm() -> MagicMock:
@@ -80,7 +82,7 @@ async def test_full_interview_flow_produces_report_on_last_answer():
         assert state["question_compre"] == "请讲一次你在团队合作中遇到的冲突。"
         assert state["is_answering"] is True
 
-        # The final answer must both close the interview and deliver the report.
+        # 最后一次回答必须同时结束面试并给出成绩单。
         state = await graph.ainvoke(
             {"user_query": "当时我和队友在方案上意见不同，我主动组织了一次讨论并达成了折中方案。"},
             config,
@@ -112,15 +114,15 @@ async def test_real_mode_asks_three_questions_per_phase():
         )
         assert state["current_phase"] == "pro_qa"
 
-        state = await graph.ainvoke({"user_query": "好的老师。"}, config)  # asks question 1
+        state = await graph.ainvoke({"user_query": "好的老师。"}, config)  # 提出第 1 题
         assert state["questions_asked"] == 1
-        for _ in range(3):  # answer three main questions in a row
+        for _ in range(3):  # 连续回答三道主题目
             state = await graph.ainvoke({"user_query": "我的回答。"}, config)
         assert state["current_phase"] == "compre_qa"
         assert state["raw_scores"].count("【专业提问】") == 3
 
     with patch("interview_graph._get_llm", return_value=_mock_llm()):
-        state = await graph.ainvoke({"user_query": "好的老师。"}, config)  # asks compre q1
+        state = await graph.ainvoke({"user_query": "好的老师。"}, config)  # 提出综合素质第 1 题
         assert state["questions_asked"] == 1
         for _ in range(3):
             state = await graph.ainvoke({"user_query": "我的回答。"}, config)
@@ -129,7 +131,7 @@ async def test_real_mode_asks_three_questions_per_phase():
     assert state["raw_scores"].count("【综合提问】") == 3
     assert state["report_data"]["total_score"] == 87
 
-    # A turn that arrives after the interview ended must not replay the closing line.
+    # 面试结束后才到达的轮次不能重放结束语。
     with patch("interview_graph._get_llm", return_value=_mock_llm()):
         state = await graph.ainvoke({"user_query": "老师，我还能再说两句吗？"}, config)
 
@@ -139,7 +141,7 @@ async def test_real_mode_asks_three_questions_per_phase():
 
 @pytest.mark.asyncio
 async def test_graph_streams_reply_tokens_as_custom_deltas():
-    """Reply tokens must be emitted through the custom stream so TTS can start early."""
+    """回复 token 必须经自定义流发出，语音合成才能提前开始。"""
     fake_llm = FakeListChatModel(responses=["不合格", "请补充本科经历与报考动机。"])
     graph = create_interview_graph()
     config = {"configurable": {"thread_id": "flow-test-stream"}}

@@ -10,16 +10,17 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
 
-from config import config
+from config import config, delivery_metrics_enabled
 from interview_modes import DEFAULT_MODE, normalize_mode as normalize_interview_mode
+from perception.report_text import build_report_user_content, delivery_report
 
 logger = logging.getLogger("interview-langgraph")
 
 # ==========================================
-# Interview State Definition
+# 面试状态定义
 # ==========================================
 class InterviewState(TypedDict):
-    # Phase: "self_intro" | "pro_qa" | "compre_qa" | "report" | "completed"
+    # 阶段："self_intro" | "pro_qa" | "compre_qa" | "report" | "completed"
     current_phase: str
     user_query: str
     reply: str
@@ -28,24 +29,25 @@ class InterviewState(TypedDict):
     question_compre: str
     is_answering: bool
     intro_attempts: int
-    # Per-phase question budget ("quick" asks 1, "real" asks several).
+    # 每个阶段的题目额度（"quick" 问 1 道，"real" 问多道）。
     interview_mode: str
     questions_per_phase: int
     questions_asked: int
     max_follow_ups: int
     max_intro_attempts: int
-    # Main questions already asked, so the next question prompt can avoid
-    # repeating them.  Accumulated by hand because LangGraph's default channel
-    # semantics replace a plain str field.
+    # 已经问过的主题目，供下一题提示词避免重复。需要手动累积，因为
+    # LangGraph 默认通道语义会整段替换普通 str 字段。
     asked_questions: str
     raw_scores: str
     final_report: str
-    # Structured score report, consumed by the frontend score card.
+    # 结构化成绩单，供前端成绩卡使用。
     report_data: dict[str, Any]
+    # 各轮表达特征。出题和追问不读它。
+    delivery_turns: list
 
 
 # ==========================================
-# Prompts
+# 提示词
 # ==========================================
 INTRO_JUDGE_SYSTEM = (
     "你是一个考研自我介绍的内容检查员。你的唯一任务是判断考生的自我介绍是否合格。\n"
@@ -149,15 +151,31 @@ FINAL_REPORT_SYSTEM = (
     "}"
 )
 
+_DELIVERY_SYSTEM_ADDENDUM = (
+    "\n# 表达特征\n"
+    "若用户消息附有表达特征，只允许它影响 scores.exp_logic 和 exp_logic_note。\n"
+    "scores.profession_know（专业知识）和 scores.comper_quality（综合素质）不得引用表达特征。\n"
+    "core_weakness（核心不足）和 improvement_tips（改进建议）也不得引用。\n"
+    "total_score 仍综合三个维度给出，不要因为表达特征另设加减分。\n"
+    "禁止把表达特征写成紧张、自信、情绪、性格或能力。\n"
+    "在 JSON 中增加 exp_logic_note：一两句话说明说法方式；没有可靠表达特征时为空字符串。\n"
+)
+
+
+def report_system_prompt(enabled: bool) -> str:
+    """关掉表达特征时，系统提示词与原来的纯文字成绩单相同。"""
+    if not enabled:
+        return FINAL_REPORT_SYSTEM
+    return FINAL_REPORT_SYSTEM + _DELIVERY_SYSTEM_ADDENDUM
+
 
 @lru_cache(maxsize=8)
 def _get_llm(temperature: float = 0.5) -> ChatOpenAI:
-    """Return a cached client per temperature.
+    """按温度返回缓存的客户端。
 
-    Building a ``ChatOpenAI`` per call duplicated configuration and made it easy
-    for timeout/retry settings to drift between call sites.  The client is safe
-    to reuse because every node only issues stateless ``ainvoke``/``astream``
-    requests against the same endpoint.
+    每次调用都新建 ``ChatOpenAI`` 会重复配置，超时和重试也容易在各调用点
+    之间漂移。客户端可以安全复用，因为每个节点只对同一端点发起无状态的
+    ``ainvoke`` / ``astream`` 请求。
     """
     return ChatOpenAI(
         model=config.llm_model,
@@ -170,7 +188,7 @@ def _get_llm(temperature: float = 0.5) -> ChatOpenAI:
 
 
 def _question_prompt(base: str, state: InterviewState) -> str:
-    """Append the already-asked questions to a question-generation prompt."""
+    """把已经问过的问题追加到出题提示词后面。"""
     asked = str(state.get("asked_questions", "") or "").strip()
     if not asked:
         return base
@@ -182,22 +200,21 @@ def _remember_question(state: InterviewState, question: str) -> str:
 
 
 def _needs_followup(judge_text: str) -> bool:
-    """Normalize the judge model's free-form answer into a follow-up decision.
+    """把评判模型的自由文本归一成是否追问的决定。
 
-    The judge prompts demand exactly "需要" or "不需要"; models still occasionally
-    wrap the word in punctuation or extra text, so match on the negative first.
+    评判提示词要求只输出“需要”或“不需要”；模型仍偶尔会包上标点或多余文字，
+    因此先匹配否定说法。
     """
     normalized = judge_text.strip()
     return "需要" in normalized and "不需要" not in normalized
 
 
 # ==========================================
-# Interview modes
+# 面试模式
 # ==========================================
-# "quick": one main question per phase, terse pacing — for demo recordings.
-# "real": several main questions per phase plus more follow-ups — a normal-length
-# mock interview. The browser selects a mode before joining; it travels to the
-# agent through the LiveKit token metadata.
+# "quick"：每个阶段一道主题目，节奏紧凑，适合演示录制。
+# "real"：每个阶段多道主题目，并有更多追问，接近正常时长的模拟面试。
+# 浏览器在加入前选择模式，经 LiveKit 令牌元数据传给智能体。
 INTERVIEW_MODES: dict[str, dict[str, Any]] = {
     "quick": {
         "label": "简单模式",
@@ -216,7 +233,7 @@ DEFAULT_INTERVIEW_MODE = DEFAULT_MODE
 
 
 def _interview_settings(state: InterviewState) -> dict[str, int]:
-    """Resolve per-phase interview budgets from state overrides + mode defaults."""
+    """用状态里的覆盖值加上模式默认值，解析每个阶段的额度。"""
     mode = normalize_interview_mode(state.get("interview_mode") or config.interview_mode)
     defaults = INTERVIEW_MODES[mode]
     settings: dict[str, int] = {}
@@ -231,12 +248,11 @@ def _interview_settings(state: InterviewState) -> dict[str, int]:
 
 
 async def _reply_text(llm: Any, messages: list[Any]) -> str:
-    """Produce a spoken reply, streaming tokens to the UI when the model supports it.
+    """生成口头回复；模型支持时把 token 流式推给界面。
 
-    Inside a LangGraph run the custom stream writer forwards each token to the LLM
-    adapter, so TTS can start on the first token instead of waiting for the full
-    response. Mocks used by unit tests are not ``BaseChatModel`` instances and fall
-    back to a plain ``ainvoke``.
+    在 LangGraph 运行中，自定义流写入器把每个 token 转给 LLM 适配器，
+    语音合成可以从第一个 token 开始，而不必等完整回复。单元测试用的
+    替身不是 ``BaseChatModel`` 实例，会回退到普通的 ``ainvoke``。
     """
     if not isinstance(llm, BaseChatModel):
         result = await llm.ainvoke(messages)
@@ -253,7 +269,7 @@ async def _reply_text(llm: Any, messages: list[Any]) -> str:
 
 
 # ==========================================
-# Graph Nodes
+# 图节点
 # ==========================================
 async def node_self_intro(state: InterviewState) -> dict:
     query = state.get("user_query", "").strip()
@@ -273,8 +289,8 @@ async def node_self_intro(state: InterviewState) -> dict:
     ])
     result_text = judge_res.content.strip()
 
-    # The prompt and the code must agree on the length gate, and the judge's
-    # verdict must not be silently overridden by a second, different threshold.
+    # 提示词和代码必须使用同一道长度门槛，评判结论也不能被另一道不同的
+    # 阈值悄悄覆盖。
     too_short = len(query) < config.min_self_intro_chars
     unqualified = "不合格" in result_text or too_short
 
@@ -297,7 +313,7 @@ async def node_self_intro(state: InterviewState) -> dict:
         }
 
     if unqualified:
-        # Attempt budget exhausted: advance anyway so the interview can always finish.
+        # 重试额度用尽：仍然往下走，保证面试总能结束。
         logger.info("[LangGraph] Self intro retry budget exhausted, forcing transition to pro_qa")
         return {
             "reply": "好的，自我介绍部分我们先到这里。接下来进入专业知识问答环节，请听题。",
@@ -338,7 +354,7 @@ async def node_pro_qa(state: InterviewState) -> dict:
     )
     llm = _get_llm(temperature=0.6)
 
-    # No pending question: ask the current main question of the phase.
+    # 没有待答题目：提出本阶段当前的主题目。
     if not is_answering or not current_q:
         prompt = (
             "请向考生提出第一道专业课面试题。"
@@ -361,10 +377,10 @@ async def node_pro_qa(state: InterviewState) -> dict:
             "asked_questions": _remember_question(state, question),
         }
 
-    # Candidate has answered the question
+    # 考生已经回答了这道题
     archive = state.get("raw_scores", "") + f"【专业提问】\n{current_q}\n【考生回答】\n{query}\n"
 
-    # Judge if follow-up is needed
+    # 判断是否需要追问
     judge_llm = _get_llm(temperature=0.1)
     judge_res = await judge_llm.ainvoke([
         SystemMessage(content=PRO_JUDGE_SYSTEM),
@@ -477,7 +493,7 @@ async def node_compre_qa(state: InterviewState) -> dict:
             "asked_questions": _remember_question(state, question),
         }
 
-    # Candidate answered comprehensive question
+    # 考生已经回答了综合素质题
     archive = state.get("raw_scores", "") + f"【综合提问】\n{current_q}\n【考生回答】\n{query}\n"
 
     judge_llm = _get_llm(temperature=0.1)
@@ -534,9 +550,8 @@ async def node_compre_qa(state: InterviewState) -> dict:
             "raw_scores": archive,
         }
 
-    # Generate the report in this same turn. Ending the turn on phase "report"
-    # would leave the frontend waiting for one more user utterance that the
-    # interview has no reason to expect.
+    # 在同一轮里生成成绩单。若本轮停在 "report" 阶段，前端会再等一句
+    # 用户发言，而面试并没有理由再要这句话。
     logger.info("[LangGraph] Compre QA finished, generating final report in this turn")
     report_result = await _generate_report({**state, "raw_scores": archive})
     report_result["raw_scores"] = archive
@@ -549,7 +564,7 @@ DEFAULT_CLOSING = "同学，今天的面试到这里就圆满结束了。感谢�
 
 
 def _clamp_score(value: Any, default: int) -> int:
-    """Coerce a model-provided score into an int within [0, 100]."""
+    """把模型给出的分数收成 [0, 100] 内的整数。"""
     try:
         score = int(round(float(value)))
     except (TypeError, ValueError):
@@ -558,10 +573,10 @@ def _clamp_score(value: Any, default: int) -> int:
 
 
 def _build_report_payload(data: dict[str, Any]) -> dict[str, Any]:
-    """Normalize the LLM's JSON report into the shape the frontend consumes.
+    """把大模型的 JSON 成绩单整理成前端使用的结构。
 
-    A report without a usable ``total_score`` is treated as a failed parse: showing
-    a fabricated default score is worse than admitting the report failed.
+    没有可用 ``total_score`` 的成绩单视为解析失败：展示一个编造的默认分，
+    比承认成绩单失败更糟。
     """
     try:
         total_score = int(round(float(data.get("total_score"))))
@@ -580,7 +595,39 @@ def _build_report_payload(data: dict[str, Any]) -> dict[str, Any]:
         "core_weakness": str(data.get("core_weakness") or DEFAULT_WEAKNESS).strip(),
         "improvement_tips": str(data.get("improvement_tips") or DEFAULT_TIPS).strip(),
         "closing": str(data.get("interviewer_closing") or DEFAULT_CLOSING).strip(),
+        "exp_logic_note": str(data.get("exp_logic_note") or "").strip(),
     }
+
+
+def _format_expression_note(note: str) -> str:
+    text = str(note or "").strip()
+    if not text:
+        return ""
+    return f"表达说明：{text}\n"
+
+
+def _format_delivery_block(delivery: dict[str, Any] | None) -> str:
+    if not isinstance(delivery, dict):
+        return ""
+    if not delivery.get("measured_turns"):
+        count = int(delivery.get("missing_turns") or 0)
+        detail = f"（{count} 轮）" if count else ""
+        return f"表达特征：本场无可靠表达特征{detail}。\n\n"
+    view = delivery.get("display") if isinstance(delivery.get("display"), dict) else {}
+    lines = [
+        "表达特征（只供表达逻辑参考，不是单独得分，也不表示情绪或性格）：",
+        f"• 回答时长：{view.get('duration', '缺测')}",
+        f"• 语速：{view.get('speech_rate', '缺测')}",
+        f"• 停顿比例：{view.get('pause_ratio', '缺测')}",
+        f"• 平均停顿：{view.get('mean_pause', '缺测')}",
+        f"• 音高变化：{view.get('pitch_std', '缺测')}",
+        f"• 音量：{view.get('intensity', '缺测')}",
+        f"• 填充词比例：{view.get('filler_ratio', '缺测')}",
+    ]
+    missing = int(delivery.get("missing_turns") or 0)
+    if missing:
+        lines.append(f"• 缺测：{missing} 轮")
+    return "\n".join(lines) + "\n\n"
 
 
 def _format_report_text(report: dict[str, Any]) -> str:
@@ -592,8 +639,10 @@ def _format_report_text(report: dict[str, Any]) -> str:
         f"🏆 总评得分：{report['total_score']}分\n\n"
         "📊 分项维度：\n"
         f"• 专业知识：{scores['profession_know']}分\n"
-        f"• 逻辑表达：{scores['exp_logic']}分\n"
+        f"• 表达逻辑：{scores['exp_logic']}分\n"
+        f"{_format_expression_note(report.get('exp_logic_note') or '')}"
         f"• 综合素质：{scores['comper_quality']}分\n\n"
+        f"{_format_delivery_block(report.get('delivery'))}"
         "❌ 核心不足：\n"
         f"{report['core_weakness']}\n\n"
         "💡 改进建议：\n"
@@ -607,10 +656,12 @@ async def _generate_report(state: InterviewState) -> dict:
     logger.info("[LangGraph] Generating final interview report")
     archive = state.get("raw_scores", "")
 
+    enabled = delivery_metrics_enabled()
+    turns = state.get("delivery_turns") or []
     llm = _get_llm(temperature=0.2)
     report_res = await llm.ainvoke([
-        SystemMessage(content=FINAL_REPORT_SYSTEM),
-        HumanMessage(content=f"这是该考生本场面试的完整文字记录：\n{archive}\n请严格按 JSON 格式输出最终评分报告。"),
+        SystemMessage(content=report_system_prompt(enabled)),
+        HumanMessage(content=build_report_user_content(archive, turns, enabled=enabled)),
     ])
 
     raw_text = report_res.content.strip()
@@ -629,6 +680,9 @@ async def _generate_report(state: InterviewState) -> dict:
             "is_answering": False,
         }
 
+    if enabled:
+        report["delivery"] = delivery_report(turns)
+
     return {
         "reply": f"面试结束。总评得分 {report['total_score']} 分。{report['closing']}",
         "final_report": _format_report_text(report),
@@ -643,10 +697,9 @@ async def node_report(state: InterviewState) -> dict:
 
 
 async def node_completed(state: InterviewState) -> dict:
-    """Handle turns that arrive after the interview already finished.
+    """处理面试已经结束后才到达的轮次。
 
-    Without this the graph would return the previous state unchanged and the
-    adapter would replay the old closing line to the candidate.
+    没有这个节点，图会原样返回上一状态，适配器就会把旧的结束语再念给考生。
     """
     logger.info("[LangGraph] Interview already completed, answering with reminder")
     return {
@@ -657,7 +710,7 @@ async def node_completed(state: InterviewState) -> dict:
 
 
 # ==========================================
-# Router
+# 路由
 # ==========================================
 def route_phase(state: InterviewState) -> Literal["self_intro", "pro_qa", "compre_qa", "report", "end"]:
     phase = state.get("current_phase", "self_intro")
@@ -673,7 +726,7 @@ def route_phase(state: InterviewState) -> Literal["self_intro", "pro_qa", "compr
 
 
 # ==========================================
-# Graph Builder
+# 图构建
 # ==========================================
 def create_interview_graph():
     builder = StateGraph(InterviewState)
@@ -691,8 +744,8 @@ def create_interview_graph():
             "pro_qa": "pro_qa",
             "compre_qa": "compre_qa",
             "report": "report",
-            # A turn after completion goes to the reminder node instead of END,
-            # so the candidate never hears the previous closing speech again.
+            # 结束后的轮次进入提醒节点，而不是 END，
+            # 这样考生不会再听到上一句结束语。
             "end": "completed",
         },
     )

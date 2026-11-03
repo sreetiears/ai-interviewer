@@ -1,8 +1,8 @@
-"""Tests for the custom interview frontend HTTP server.
+"""自定义面试前端 HTTP 服务的测试。
 
-The tests spin up a real ``ThreadingHTTPServer`` on port 0 and point
-``server.FRONTEND_DIR`` at a temporary directory, so no network access and no
-real ``frontend/`` files are required.
+测试在端口 0 上启动真实的 ``ThreadingHTTPServer``，并把
+``server.FRONTEND_DIR`` 指向临时目录，因此不需要网络，也不需要真实的
+``frontend/`` 文件。
 """
 
 import errno
@@ -22,10 +22,10 @@ SECRET_MARKER = b"TOP-SECRET-DO-NOT-LEAK"
 
 
 # ---------------------------------------------------------------------------
-# Helpers / fixtures
+# 辅助函数 / 测试夹具
 # ---------------------------------------------------------------------------
 def http_request(port, method="GET", path="/", headers=None):
-    """Perform one HTTP request and return (status, lowercase headers, body)."""
+    """发起一次 HTTP 请求，返回（状态码、小写响应头、正文）。"""
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     try:
         connection.request(method, path, headers=headers or {})
@@ -40,18 +40,18 @@ def http_request(port, method="GET", path="/", headers=None):
 
 
 def decode_claims(token):
-    """Decode JWT claims without verifying the signature (no network needed)."""
+    """解码 JWT 声明且不校验签名（不需要网络）。"""
     return jwt.decode(token, options={"verify_signature": False})
 
 
 def token_metadata(token):
-    """Return the parsed ``metadata`` claim of a LiveKit token."""
+    """返回 LiveKit 令牌中已解析的 ``metadata`` 声明。"""
     return json.loads(decode_claims(token)["metadata"])
 
 
 @pytest.fixture()
 def frontend_root(tmp_path, monkeypatch):
-    """Create a temporary frontend tree and make the server serve from it."""
+    """创建临时前端目录树，并让服务从那里提供文件。"""
     root = tmp_path / "frontend"
     root.mkdir()
     (root / "index.html").write_text(
@@ -76,8 +76,8 @@ def frontend_root(tmp_path, monkeypatch):
     nested.mkdir()
     (nested / "theme.css").write_text("/* theme */", encoding="utf-8")
 
-    # Sibling directory whose name merely *starts with* the frontend directory
-    # name: the old startswith() check would happily serve files from here.
+    # 兄弟目录的名字只是以前端目录名*开头*：
+    # 旧的 startswith() 检查会欣然从这里提供文件。
     evil_sibling = tmp_path / "frontend_evil"
     evil_sibling.mkdir()
     (evil_sibling / "secret.txt").write_bytes(SECRET_MARKER)
@@ -89,7 +89,7 @@ def frontend_root(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def http_port(frontend_root):
-    """Run a real ThreadingHTTPServer on an ephemeral port for one test."""
+    """为单个测试在临时端口上运行真实的 ThreadingHTTPServer。"""
     httpd = server.create_server(host="127.0.0.1", port=0)
     thread = threading.Thread(
         target=httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
@@ -104,17 +104,17 @@ def http_port(frontend_root):
 
 
 # ---------------------------------------------------------------------------
-# Token unit test (pre-existing behaviour)
+# 令牌单元测试（既有行为）
 # ---------------------------------------------------------------------------
 def test_create_token():
     token = create_token("test-room", "test-user")
     assert isinstance(token, str)
     assert len(token) > 20
-    assert token.startswith("ey")  # JWT prefix
+    assert token.startswith("ey")  # JWT 前缀
 
 
 # ---------------------------------------------------------------------------
-# Static files
+# 静态文件
 # ---------------------------------------------------------------------------
 def test_index_is_served_as_html(http_port):
     status, headers, body = http_request(http_port, "GET", "/")
@@ -143,7 +143,7 @@ def test_static_content_types(http_port, filename, expected_type):
     status, headers, body = http_request(http_port, "GET", "/" + filename)
     assert status == 200, filename
     assert headers["content-type"].startswith(expected_type), filename
-    assert body  # non-empty asset
+    assert body  # 资源非空
 
 
 def test_css_and_js_use_short_cache(http_port):
@@ -183,17 +183,17 @@ def test_directory_path_returns_404(http_port):
 
 
 # ---------------------------------------------------------------------------
-# Path traversal
+# 路径穿越
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "path",
     [
         "/../secret.txt",
-        "/%2e%2e%2fsecret.txt",  # percent-encoded ../
+        "/%2e%2e%2fsecret.txt",  # 百分号编码的 ../
         "/..%2fsecret.txt",
-        "/../frontend_evil/secret.txt",  # prefix-similar sibling directory
+        "/../frontend_evil/secret.txt",  # 前缀相似的兄弟目录
         "/%2e%2e/frontend_evil/secret.txt",
-        "/..\\secret.txt",  # Windows-style separator
+        "/..\\secret.txt",  # Windows 风格分隔符
         "/..%5csecret.txt",
     ],
 )
@@ -204,7 +204,7 @@ def test_path_traversal_is_blocked(http_port, path):
 
 
 # ---------------------------------------------------------------------------
-# Token endpoint
+# 令牌接口
 # ---------------------------------------------------------------------------
 def test_token_endpoint_contract(http_port, monkeypatch):
     monkeypatch.delenv("INTERVIEW_MODE", raising=False)
@@ -256,7 +256,7 @@ def test_token_endpoint_defaults(http_port, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Interview mode (quick / real) -> token metadata
+# 面试模式（quick / real）-> 令牌元数据
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("mode", ["quick", "real"])
 def test_token_mode_is_written_to_metadata(http_port, monkeypatch, mode):
@@ -279,7 +279,7 @@ def test_token_mode_uses_environment_default(http_port, monkeypatch):
     assert payload["interviewMode"] == "real"
     assert token_metadata(payload["token"])["interview_mode"] == "real"
 
-    # An explicit query parameter overrides the environment default.
+    # 显式查询参数覆盖环境变量默认值。
     _, _, body = http_request(http_port, "GET", "/api/token?mode=quick")
     payload = json.loads(body)
     assert payload["interviewMode"] == "quick"
@@ -354,10 +354,10 @@ def test_create_token_ttl_is_bounded(monkeypatch):
 @pytest.mark.parametrize(
     "path",
     [
-        "/api/token?room=bad%20room",  # space
-        "/api/token?room=%3Cscript%3E",  # HTML/JS characters
-        "/api/token?identity=" + "a" * 65,  # over-long identity
-        "/api/token?room=" + "r" * 65,  # over-long room
+        "/api/token?room=bad%20room",  # 空格
+        "/api/token?room=%3Cscript%3E",  # HTML/JS 字符
+        "/api/token?identity=" + "a" * 65,  # 过长的身份
+        "/api/token?room=" + "r" * 65,  # 过长的房间名
     ],
 )
 def test_token_endpoint_rejects_invalid_identifiers(http_port, path):
@@ -368,18 +368,25 @@ def test_token_endpoint_rejects_invalid_identifiers(http_port, path):
 
 
 # ---------------------------------------------------------------------------
-# Health endpoint
+# 健康检查接口
 # ---------------------------------------------------------------------------
-def test_health_endpoint(http_port):
+def test_health_endpoint(http_port, monkeypatch):
+    monkeypatch.delenv("DELIVERY_METRICS", raising=False)
     status, headers, body = http_request(http_port, "GET", "/api/health")
     assert status == 200
     assert headers["content-type"].startswith("application/json")
-    assert json.loads(body) == {"status": "ok"}
+    assert json.loads(body) == {"status": "ok", "deliveryMetrics": True}
     assert headers["cache-control"] == "no-store"
 
 
+def test_health_reports_delivery_switch(http_port, monkeypatch):
+    monkeypatch.setenv("DELIVERY_METRICS", "0")
+    _, _, body = http_request(http_port, "GET", "/api/health")
+    assert json.loads(body)["deliveryMetrics"] is False
+
+
 # ---------------------------------------------------------------------------
-# Headers / response correctness
+# 响应头 / 响应正确性
 # ---------------------------------------------------------------------------
 def test_content_length_matches_body(http_port):
     for path in ("/", "/styles.css", "/missing.js", "/api/health", "/api/token"):
@@ -398,7 +405,7 @@ def test_security_headers_present(http_port):
 
 
 # ---------------------------------------------------------------------------
-# Method handling
+# 方法处理
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("method", ["POST", "PUT", "DELETE", "PATCH", "OPTIONS", "FOO"])
 def test_non_get_methods_return_405(http_port, method):
@@ -412,11 +419,11 @@ def test_head_is_not_served(http_port):
     status, headers, body = http_request(http_port, "HEAD", "/")
     assert status == 405
     assert headers["allow"] == "GET"
-    assert body == b""  # HEAD responses carry no body
+    assert body == b""  # HEAD 响应不带正文
 
 
 # ---------------------------------------------------------------------------
-# CORS
+# 跨域（CORS）
 # ---------------------------------------------------------------------------
 def test_cors_is_not_wildcard(http_port):
     for path in ("/", "/api/health", "/api/token"):
@@ -441,7 +448,7 @@ def test_allowed_origin_whitelist(http_port, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Error handling / server configuration
+# 错误处理 / 服务配置
 # ---------------------------------------------------------------------------
 def test_unhandled_error_returns_500(http_port, monkeypatch):
     def boom(room_name, identity, mode):
@@ -523,7 +530,7 @@ def test_run_server_closes_on_keyboard_interrupt(monkeypatch):
 
 
 def test_console_stream_encoding_is_safe():
-    """Regression test: cp936 consoles must not raise on emoji in log output."""
+    """回归测试：cp936 控制台在日志输出表情时不能抛异常。"""
     raw = io.BytesIO()
     stream = io.TextIOWrapper(raw, encoding="cp936", errors="strict")
     server._make_stream_encoding_safe(stream)
@@ -534,5 +541,5 @@ def test_console_stream_encoding_is_safe():
     encoded = raw.getvalue()
     assert b"startup ok" in encoded
     assert "启动".encode("cp936") in encoded
-    # The emoji was escaped instead of raising UnicodeEncodeError.
+    # 表情被转义，而不是抛出 UnicodeEncodeError。
     assert "\U0001F680".encode("utf-8") not in encoded

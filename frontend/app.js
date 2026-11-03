@@ -1,22 +1,22 @@
 /* ==========================================================================
    考研复试 · AI 模拟面试工作台 — frontend/app.js
-   Plain ES2019+ browser JavaScript. No build step, no dependencies other
-   than the LiveKit client UMD bundle loaded before this file.
+   纯 ES2019+ 浏览器 JavaScript。无需构建步骤，除本文件之前加载的
+   LiveKit 客户端 UMD 包外没有其他依赖。
 
-   Data channel contract (topic = "interview", UTF-8 JSON):
+   数据通道协议（topic = "interview"，UTF-8 JSON）：
      { type: "status", state: "thinking" | "listening" | "speaking" }
      { type: "phase",  phase: "self_intro" | "pro_qa" | "compre_qa" | "report" | "completed" }
      { type: "report", report: { total_score, scores: {...}, core_weakness,
                                  improvement_tips, closing }, text?: string }
 
-   Transcription arrives via RoomEvent.TranscriptionReceived. Everything the
-   backend sends is treated as untrusted and rendered with textContent only.
+   转写通过 RoomEvent.TranscriptionReceived 到达。后端发来的一切都视为
+   不可信内容，只用 textContent 渲染。
    ========================================================================== */
 (function () {
   'use strict';
 
   /* ------------------------------------------------------------------ *
-   * Environment / constants
+   * 环境 / 常量
    * ------------------------------------------------------------------ */
 
   const LIVEKIT_CDN = 'https://cdn.jsdelivr.net/npm/livekit-client@2.11.0/dist/livekit-client.umd.min.js';
@@ -156,7 +156,7 @@
   };
 
   /* ------------------------------------------------------------------ *
-   * DOM references
+   * DOM 引用
    * ------------------------------------------------------------------ */
 
   function byId(id) {
@@ -230,6 +230,21 @@
   const reportWeakness = byId('reportWeakness');
   const reportTips = byId('reportTips');
   const reportClosing = byId('reportClosing');
+  const deliveryNotice = byId('deliveryNotice');
+  const deliveryBlock = byId('deliveryBlock');
+  const deliveryDisclaimer = byId('deliveryDisclaimer');
+  const deliveryGrid = byId('deliveryGrid');
+  const deliveryMissing = byId('deliveryMissing');
+  const deliveryComment = byId('deliveryComment');
+  const DELIVERY_ROWS = [
+    { key: 'duration', label: '回答时长' },
+    { key: 'speech_rate', label: '语速' },
+    { key: 'pause_ratio', label: '停顿比例' },
+    { key: 'mean_pause', label: '平均停顿' },
+    { key: 'pitch_std', label: '音高变化' },
+    { key: 'intensity', label: '音量' },
+    { key: 'filler_ratio', label: '填充词比例' }
+  ];
 
   const toastRegion = byId('toastRegion');
   const audioSink = document.createElement('div');
@@ -240,7 +255,7 @@
   document.body.appendChild(audioSink);
 
   /* ------------------------------------------------------------------ *
-   * Runtime state
+   * 运行时状态
    * ------------------------------------------------------------------ */
 
   const state = {
@@ -273,7 +288,7 @@
   const textDecoder = typeof window.TextDecoder === 'function' ? new window.TextDecoder('utf-8') : null;
 
   /* ------------------------------------------------------------------ *
-   * Small utilities
+   * 小工具函数
    * ------------------------------------------------------------------ */
 
   function setText(node, text) {
@@ -323,7 +338,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Toasts / inline errors
+   * 提示条 / 行内错误
    * ------------------------------------------------------------------ */
 
   const TOAST_ICON = { info: 'i-info', success: 'i-check', warn: 'i-warning', error: 'i-warning' };
@@ -378,7 +393,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Connection badge / hints / controls
+   * 连接状态 / 提示 / 控件
    * ------------------------------------------------------------------ */
 
   function setConn(conn) {
@@ -520,7 +535,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Phase stepper (driven by the data channel)
+   * 阶段步进器（由数据通道驱动）
    * ------------------------------------------------------------------ */
 
   function setPhase(phase, silent) {
@@ -550,8 +565,8 @@
     else if (completed) setText(phaseChip, '面试已结束');
     else setText(phaseChip, PHASE_LABELS[phase]);
 
-    // Display-only hook: lets the redesigned shell show the current phase index
-    // and style the phase title without touching any interview logic.
+    // 仅用于展示：让改版外壳显示当前阶段序号并设置阶段标题样式，
+    // 不改动任何面试逻辑。
     if (document.body) document.body.dataset.phase = phase || '';
 
     if (phase && phase !== previous && !silent) {
@@ -561,7 +576,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * AI status / speaking indicators
+   * AI 状态 / 发言指示
    * ------------------------------------------------------------------ */
 
   function setAiStatus(status) {
@@ -632,7 +647,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Session timer
+   * 会话计时器
    * ------------------------------------------------------------------ */
 
   function startTimer() {
@@ -653,7 +668,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Transcript rendering (textContent only — never innerHTML)
+   * 转写渲染（只用 textContent，绝不用 innerHTML）
    * ------------------------------------------------------------------ */
 
   function updateTranscriptCount() {
@@ -794,7 +809,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Data channel (tolerant decoding)
+   * 数据通道（容错解码）
    * ------------------------------------------------------------------ */
 
   function decodePayload(payload) {
@@ -858,11 +873,11 @@
       return;
     }
 
-    // Unknown message types are ignored on purpose (forward compatibility).
+    // 未知消息类型故意忽略（便于向前兼容）。
   }
 
   /* ------------------------------------------------------------------ *
-   * Report panel
+   * 成绩单面板
    * ------------------------------------------------------------------ */
 
   function toScore(value) {
@@ -887,7 +902,9 @@
       dims: dims,
       weakness: typeof raw.core_weakness === 'string' ? raw.core_weakness.trim() : '',
       tips: typeof raw.improvement_tips === 'string' ? raw.improvement_tips.trim() : '',
-      closing: typeof raw.closing === 'string' ? raw.closing.trim() : ''
+      closing: typeof raw.closing === 'string' ? raw.closing.trim() : '',
+      note: typeof raw.exp_logic_note === 'string' ? raw.exp_logic_note.trim() : '',
+      delivery: raw.delivery && typeof raw.delivery === 'object' ? raw.delivery : null
     };
   }
 
@@ -979,6 +996,55 @@
     setText(reportWeakness, data.weakness || '暂无');
     setText(reportTips, data.tips || '暂无');
     setText(reportClosing, data.closing || '');
+    renderDelivery(data);
+  }
+
+  function renderDelivery(data) {
+    if (!deliveryBlock) return;
+    const delivery = data && data.delivery;
+    const show = !IS_DEMO && delivery && typeof delivery === 'object';
+    deliveryBlock.hidden = !show;
+    if (!show) return;
+
+    const measured = Number(delivery.measured_turns) || 0;
+    const missing = Number(delivery.missing_turns) || 0;
+    const display = delivery.display && typeof delivery.display === 'object' ? delivery.display : {};
+    if (deliveryDisclaimer) deliveryDisclaimer.hidden = measured === 0;
+    if (deliveryGrid) {
+      deliveryGrid.hidden = measured === 0;
+      deliveryGrid.textContent = '';
+      if (measured > 0) {
+        DELIVERY_ROWS.forEach(function (row) {
+          const wrap = document.createElement('div');
+          const term = document.createElement('dt');
+          const value = document.createElement('dd');
+          term.textContent = row.label;
+          value.textContent = display[row.key] || '缺测';
+          wrap.appendChild(term);
+          wrap.appendChild(value);
+          deliveryGrid.appendChild(wrap);
+        });
+      }
+    }
+    if (deliveryMissing) {
+      if (measured === 0) {
+        deliveryMissing.hidden = false;
+        setText(deliveryMissing, missing
+          ? '本场无可靠表达特征（' + missing + ' 轮）。'
+          : '本场无可靠表达特征。');
+      } else if (missing > 0) {
+        deliveryMissing.hidden = false;
+        setText(deliveryMissing, '另有 ' + missing + ' 轮无可靠表达特征。');
+      } else {
+        deliveryMissing.hidden = true;
+        setText(deliveryMissing, '');
+      }
+    }
+    if (deliveryComment) {
+      const note = data.note || '';
+      deliveryComment.hidden = !note;
+      setText(deliveryComment, note);
+    }
   }
 
   function applyRawReport(text) {
@@ -996,6 +1062,16 @@
     setText(reportTips, '');
     setText(reportClosing, '');
     setText(reportRaw, '');
+    if (deliveryBlock) deliveryBlock.hidden = true;
+    if (deliveryGrid) deliveryGrid.textContent = '';
+    if (deliveryMissing) {
+      deliveryMissing.hidden = true;
+      setText(deliveryMissing, '');
+    }
+    if (deliveryComment) {
+      deliveryComment.hidden = true;
+      setText(deliveryComment, '');
+    }
     DIM_KEYS.forEach(function (key) {
       setText(byId('dimValue-' + key), '--');
       const fill = byId('dimFill-' + key);
@@ -1095,7 +1171,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Audio playback / autoplay handling
+   * 音频播放 / 自动播放处理
    * ------------------------------------------------------------------ */
 
   function isAudioTrack(track) {
@@ -1138,7 +1214,7 @@
       const sid = track.sid;
       if (sid && audioEls.has(sid)) {
         const element = audioEls.get(sid);
-        try { element.pause(); } catch (error) { /* noop */ }
+        try { element.pause(); } catch (error) { /* 忽略 */ }
         if (element.parentNode) element.parentNode.removeChild(element);
         audioEls.delete(sid);
       }
@@ -1147,14 +1223,14 @@
           track.detach().forEach(function (node) {
             if (node && node.parentNode) node.parentNode.removeChild(node);
           });
-        } catch (error) { /* noop */ }
+        } catch (error) { /* 忽略 */ }
       }
     }
   }
 
   function cleanupAudio() {
     audioEls.forEach(function (element) {
-      try { element.pause(); } catch (error) { /* noop */ }
+      try { element.pause(); } catch (error) { /* 忽略 */ }
       if (element.parentNode) element.parentNode.removeChild(element);
     });
     audioEls.clear();
@@ -1166,7 +1242,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Room wiring
+   * 房间接线
    * ------------------------------------------------------------------ */
 
   function onRoomEvent(room, eventName, handler) {
@@ -1234,7 +1310,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Connect / disconnect (real LiveKit session)
+   * 连接 / 断开（真实 LiveKit 会话）
    * ------------------------------------------------------------------ */
 
   function loadLiveKit() {
@@ -1338,7 +1414,7 @@
     } catch (error) {
       if (state.room === room) state.room = null;
       if (room) {
-        try { room.disconnect(); } catch (disconnectError) { /* noop */ }
+        try { room.disconnect(); } catch (disconnectError) { /* 忽略 */ }
       }
       state.starting = false;
       setConn('error');
@@ -1484,7 +1560,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Demo mode (fully local, no LiveKit, no microphone)
+   * 演示模式（完全本地，不使用 LiveKit，也不使用麦克风）
    * ------------------------------------------------------------------ */
 
   function clearDemoTimers() {
@@ -1727,7 +1803,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Page lifecycle
+   * 页面生命周期
    * ------------------------------------------------------------------ */
 
   function handlePageHide() {
@@ -1739,12 +1815,12 @@
     const room = state.room;
     state.room = null;
     if (room) {
-      try { room.disconnect(); } catch (error) { /* noop */ }
+      try { room.disconnect(); } catch (error) { /* 忽略 */ }
     }
   }
 
   /* ------------------------------------------------------------------ *
-   * Event binding
+   * 事件绑定
    * ------------------------------------------------------------------ */
 
   function bindEvents() {
@@ -1828,8 +1904,18 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Boot
+   * 启动
    * ------------------------------------------------------------------ */
+
+  function loadDeliveryNotice() {
+    if (IS_DEMO || !deliveryNotice) return;
+    fetch('/api/health', { cache: 'no-store' })
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (body) {
+        if (body && body.deliveryMetrics === true) deliveryNotice.hidden = false;
+      })
+      .catch(function () { /* 进场说明拿不到就保持关闭，避免在未测量时预告。 */ });
+  }
 
   function init() {
     if (!transcriptEl) return;
@@ -1846,6 +1932,7 @@
     if (IS_DEMO) {
       initDemo();
     } else {
+      loadDeliveryNotice();
       logSystem('系统提示：点击「进入考场」开始模拟面试，系统将自动申请麦克风权限。');
       logSystem('面试流程：自我介绍 → 专业问答 → 综合素质 → 综合成绩单。');
       window.setTimeout(function () {
@@ -1860,8 +1947,8 @@
     }
 
     if (params.get('debug') === '1') {
-      // Development-only hooks: lets the data-channel contract be exercised
-      // without a live room (?debug=1). Never installed in normal use.
+      // 仅开发用钩子：可在没有真实房间时演练数据通道协议（?debug=1）。
+      // 正常使用时不会挂上。
       window.__interviewDebug = {
         data: handleDataMessage,
         transcription: handleTranscription,

@@ -249,6 +249,7 @@
       <p class="control-note" id="controlHint">进入考场后将自动申请麦克风权限</p>
       <p class="stage-hint" id="stageHint">
         <span id="stageHintText">进入考场后，AI 考官会通过语音与你完成一场完整模拟面试；请允许麦克风权限。</span>
+        <span class="delivery-notice" id="deliveryNotice" hidden>本场会测量说话方式（语速、停顿、音量、音高变化、填充词），只用于表达逻辑的反馈。</span>
         <a class="hint-link" id="demoLink" href="?demo=1">先看看演示</a>
       </p>
     </footer>
@@ -298,6 +299,12 @@
               <span class="dim-value" id="dimValue-exp_logic">--</span>
             </div>
             <div class="dim-bar"><span class="dim-fill" id="dimFill-exp_logic"></span></div>
+            <div class="delivery" id="deliveryBlock" hidden>
+              <p class="delivery-disclaimer" id="deliveryDisclaimer">这些数字只供表达逻辑参考，不是单独得分，也不表示情绪或性格。</p>
+              <dl class="delivery-grid" id="deliveryGrid"></dl>
+              <p class="delivery-missing" id="deliveryMissing" hidden></p>
+              <p class="delivery-comment" id="deliveryComment"></p>
+            </div>
           </div>
           <div class="dim" data-dim="comper_quality">
             <div class="dim-head">

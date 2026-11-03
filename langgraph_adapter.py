@@ -2,13 +2,15 @@ import asyncio
 import inspect
 import logging
 import uuid
+from dataclasses import asdict
 from collections.abc import Awaitable, Callable
 from typing import Any
 from livekit.agents import llm
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, NOT_GIVEN, NotGivenOr
 
-from config import config
+from config import config, delivery_metrics_enabled
 from interview_graph import interview_graph
+from perception.delivery import TurnDelivery
 from interview_modes import normalize_mode as normalize_interview_mode
 
 logger = logging.getLogger("langgraph-llm-adapter")
@@ -19,15 +21,14 @@ EventSink = Callable[[InterviewEvent], Awaitable[None] | None]
 
 class LangGraphLLM(llm.LLM):
     """
-    LiveKit LLM adapter that drives the multi-turn interview using LangGraph.
-    It fulfills the livekit.agents.llm.LLM interface seamlessly.
+    用 LangGraph 驱动多轮面试的 LiveKit LLM 适配器。
+    它无缝实现 livekit.agents.llm.LLM 接口。
 
-    ``on_event`` receives UI-facing events (thinking state, interview phase and the
-    final score report) so the browser can render the stepper and score card without
-    having to guess from the audio stream.
+    ``on_event`` 接收面向界面的事件（思考状态、面试阶段和最终成绩单），
+    浏览器据此渲染步进器和成绩卡，而不必从音频流里猜测。
 
-    ``interview_mode`` selects the question budget: ``quick`` (short run) or
-    ``real`` (full-length interview).
+    ``interview_mode`` 选择题目额度：``quick``（短流程）或
+    ``real``（完整时长的面试）。
     """
 
     def __init__(
@@ -43,15 +44,15 @@ class LangGraphLLM(llm.LLM):
         self.api_lock = asyncio.Lock()
         self._on_event = on_event
         self.interview_mode = normalize_interview_mode(interview_mode or config.interview_mode)
-        # The graph checkpoints state between turns, so ``report_data`` and
-        # ``current_phase`` survive into later turns.  Remember what the UI has
-        # already received or the closing report would pop up again every time
-        # the candidate says something after the interview ended.
+        # 图会在轮次之间把状态写入检查点，因此 ``report_data`` 和
+        # ``current_phase`` 会留到后续轮次。记住界面已经收到过什么，
+        # 否则面试结束后考生再说一句话，结束成绩单就会再弹一次。
         self._last_phase: str | None = None
         self._report_emitted = False
+        self._delivery_turns: list[TurnDelivery] = []
 
     async def emit_event(self, event: InterviewEvent) -> None:
-        """Best-effort emit; a broken UI sink must never break the interview."""
+        """尽力发送；界面接收端坏了也绝不能打断面试。"""
         sink = self._on_event
         if sink is None:
             return
@@ -65,14 +66,18 @@ class LangGraphLLM(llm.LLM):
             )
 
     def should_emit_phase(self, phase: str) -> bool:
-        """True the first time a phase is observed in this session."""
+        """本会话第一次观察到该阶段时返回 True。"""
         if not phase or phase == self._last_phase:
             return False
         self._last_phase = phase
         return True
 
+    def add_delivery(self, turn: TurnDelivery) -> None:
+        """记下这一轮的表达特征。波形不进入这里。"""
+        self._delivery_turns.append(turn)
+
     def should_emit_report(self) -> bool:
-        """True at most once per session; checkpoints retain the report forever."""
+        """每个会话最多返回一次 True；检查点会一直保留成绩单。"""
         if self._report_emitted:
             return False
         self._report_emitted = True
@@ -111,11 +116,10 @@ class LangGraphLLM(llm.LLM):
         return None
 
     def _extract_query(self, chat_ctx: llm.ChatContext) -> str:
-        """Return the latest user utterance, or ``""`` when there is none.
+        """返回最近一条用户发言；没有时返回 ``""``。
 
-        Never fall back to an assistant message: the graph treats its input as a
-        candidate answer, so feeding it the examiner's previous question would
-        advance the interview state with the wrong speaker.
+        绝不能回退到助手消息：图把输入当作考生回答，若喂进考官上一句提问，
+        就会用错误的说话人推进面试状态。
         """
         for msg in reversed(chat_ctx.messages()):
             if msg.role != "user":
@@ -145,9 +149,8 @@ class LangGraphLLMStream(llm.LLMStream):
 
     async def _run(self) -> None:
         if not self._query:
-            # LiveKit can ask for a reply without a user message (for example an
-            # empty turn trigger).  There is nothing to answer, and inventing a
-            # query would corrupt the interview state.
+            # LiveKit 可能在没有用户消息时请求回复（例如一次空轮触发）。
+            # 此时没有内容可答，编造一条查询会破坏面试状态。
             logger.info("LangGraphLLMStream: no user utterance, skipping graph")
             return
 
@@ -162,8 +165,12 @@ class LangGraphLLMStream(llm.LLMStream):
                     "user_query": self._query,
                     "interview_mode": graph_llm.interview_mode,
                 }
-                # "custom" carries per-token deltas written by graph nodes, so TTS can
-                # start on the first token; "values" carries the final state.
+                if delivery_metrics_enabled():
+                    input_state["delivery_turns"] = [
+                        asdict(turn) for turn in graph_llm._delivery_turns
+                    ]
+                # "custom" 携带图节点写出的逐 token 增量，语音合成可以从第一个
+                # token 开始；"values" 携带最终状态。
                 async for mode, chunk in graph_llm.graph.astream(
                     input_state,
                     config=graph_llm.config,
@@ -182,8 +189,8 @@ class LangGraphLLMStream(llm.LLMStream):
                 logger.info("[LangGraphLLMStream] Output reply: %s", reply_text[:60])
 
                 if not streamed_any:
-                    # Static replies (e.g. phase transitions) never enter the token
-                    # stream; send them whole so TTS can start immediately.
+                    # 静态回复（例如阶段过渡）不会进入 token 流；整段发出，
+                    # 让语音合成可以立刻开始。
                     self._send_chunk(reply_text)
 
                 phase = result.get("current_phase")
@@ -193,9 +200,8 @@ class LangGraphLLMStream(llm.LLMStream):
                 report_data = result.get("report_data")
                 final_report = str(result.get("final_report") or "")
                 has_structured_report = isinstance(report_data, dict) and bool(report_data)
-                # Even when the model returned unparseable JSON, the graph keeps
-                # the raw text in ``final_report``.  Sending it lets the browser
-                # show the raw report instead of silently showing nothing.
+                # 即使模型返回了无法解析的 JSON，图仍把原文留在 ``final_report``。
+                # 把它发出去，浏览器就能显示原始成绩单，而不是什么都不显示。
                 if (has_structured_report or final_report) and graph_llm.should_emit_report():
                     await graph_llm.emit_event({
                         "type": "report",

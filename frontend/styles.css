@@ -1,7 +1,7 @@
 /* ==========================================================================
    考研复试 · AI 模拟面试
-   Quiet editorial interview room. Near-graphite canvas, one cool accent,
-   hairline rules, type-driven hierarchy. No frameworks, no remote assets.
+   安静的编辑式面试间。近石墨色画布、一处冷色强调、细线分隔、
+   以排版建立层级。不使用框架，也不加载远程资源。
    ========================================================================== */
 
 :root {
@@ -120,7 +120,7 @@ a:hover {
   overflow: hidden;
 }
 
-/* ---- Accessibility ------------------------------------------------------- */
+/* ---- 无障碍 ------------------------------------------------------------- */
 
 .skip-link {
   position: fixed;
@@ -163,7 +163,7 @@ a:hover {
   text-align: center;
 }
 
-/* ---- Shell / top bar ----------------------------------------------------- */
+/* ---- 外壳 / 顶栏 --------------------------------------------------------- */
 
 .shell {
   position: relative;
@@ -305,7 +305,7 @@ body[data-conn="idle"] .topbar-meta {
   white-space: nowrap;
 }
 
-/* ---- Lobby --------------------------------------------------------------- */
+/* ---- 候场大厅 ------------------------------------------------------------ */
 
 .lobby {
   display: none;
@@ -438,7 +438,7 @@ body[data-conn="idle"] .lobby {
   color: var(--text-3);
 }
 
-/* ---- Session ------------------------------------------------------------- */
+/* ---- 面试会话 ------------------------------------------------------------ */
 
 .session {
   display: none;
@@ -517,7 +517,7 @@ body[data-phase="completed"] .phase-index::before {
   overflow-wrap: anywhere;
 }
 
-/* Minimal stepper: hairline progress + quiet labels */
+/* 极简步进器：细线进度与低调标签 */
 
 .stepper {
   position: relative;
@@ -599,7 +599,7 @@ body[data-phase="completed"] .phase-index::before {
   color: var(--text-3);
 }
 
-/* ---- Session body: stage + conversation --------------------------------- */
+/* ---- 会话主体：舞台与对话 ------------------------------------------------ */
 
 .session-body {
   flex: 1 1 auto;
@@ -752,7 +752,7 @@ body[data-phase="completed"] .phase-index::before {
   display: none;
 }
 
-/* Candidate: secondary row with a hairline rule */
+/* 考生：次级行，以细线分隔 */
 
 .tile--user {
   width: min(360px, 100%);
@@ -798,13 +798,13 @@ body[data-phase="completed"] .phase-index::before {
   color: var(--text-2);
 }
 
-/* The control bar owns the microphone toggle; keep the duplicate hook inert. */
+/* 控制栏负责麦克风开关；重复的挂钩保持无效。 */
 
 .mic-toggle {
   display: none;
 }
 
-/* Conversation */
+/* 对话 */
 
 .conversation {
   display: flex;
@@ -1025,7 +1025,7 @@ body[data-phase="completed"] .phase-index::before {
   height: 12px;
 }
 
-/* Error state: one sentence, one retry */
+/* 错误态：一句话说明，一次重试 */
 
 .error-card {
   flex: 0 0 auto;
@@ -1093,7 +1093,7 @@ body[data-conn="error"] .conversation {
   border-color: var(--accent);
 }
 
-/* ---- Control bar --------------------------------------------------------- */
+/* ---- 控制栏 -------------------------------------------------------------- */
 
 .controlbar {
   flex: 0 0 auto;
@@ -1191,7 +1191,7 @@ body[data-conn="idle"] .ctrl-spacer {
   display: block;
 }
 
-/* Hidden duplicates / secondary text */
+/* 隐藏的重复项 / 次要文字 */
 
 .control-note {
   display: none;
@@ -1275,6 +1275,10 @@ body[data-conn="idle"] #btnConnect {
   min-width: 0;
 }
 
+.delivery-notice {
+  flex-basis: 100%;
+}
+
 .hint-link {
   color: var(--text-2);
   border-bottom: 1px solid var(--line-2);
@@ -1286,7 +1290,7 @@ body[data-conn="idle"] #btnConnect {
   border-color: var(--line-2);
 }
 
-/* ---- Playback banner ----------------------------------------------------- */
+/* ---- 播放提示条 ---------------------------------------------------------- */
 
 .playback-banner {
   position: fixed;
@@ -1318,7 +1322,7 @@ body[data-conn="idle"] #btnConnect {
   line-height: 1.5;
 }
 
-/* ---- Report panel -------------------------------------------------------- */
+/* ---- 成绩单面板 ---------------------------------------------------------- */
 
 .modal {
   position: fixed;
@@ -1497,6 +1501,45 @@ body[data-conn="idle"] #btnConnect {
   transition: transform 0.3s var(--ease);
 }
 
+.delivery {
+  margin-top: 12px;
+}
+
+.delivery-disclaimer,
+.delivery-missing,
+.delivery-comment {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.delivery-comment {
+  color: var(--text-2);
+}
+
+.delivery-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 16px;
+  margin: 10px 0 0;
+}
+
+.delivery-grid div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.delivery-grid dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
 .dim-fill.is-in {
   transform: scaleX(var(--pct, 0));
 }
@@ -1577,7 +1620,7 @@ body[data-conn="idle"] #btnConnect {
   display: none;
 }
 
-/* One-time reveal of the report body */
+/* 成绩单正文只展开一次 */
 
 .modal .report-scroll {
   opacity: 0;
@@ -1590,7 +1633,7 @@ body[data-conn="idle"] #btnConnect {
   transform: none;
 }
 
-/* ---- Toasts -------------------------------------------------------------- */
+/* ---- 提示条 -------------------------------------------------------------- */
 
 .toast-region {
   position: fixed;
@@ -1658,7 +1701,7 @@ body[data-conn="idle"] #btnConnect {
   }
 }
 
-/* ---- Responsive ---------------------------------------------------------- */
+/* ---- 响应式 -------------------------------------------------------------- */
 
 @media (min-width: 960px) {
   body:not([data-conn="idle"]) .shell {
@@ -1903,7 +1946,7 @@ body[data-conn="idle"] #btnConnect {
   }
 }
 
-/* Short desktop viewports: allow the page to scroll instead of clipping. */
+/* 较矮的桌面视口：允许页面滚动，避免内容被裁切。 */
 
 @media (min-width: 960px) and (max-height: 719px) {
   body:not([data-conn="idle"]) .shell {
@@ -1919,7 +1962,7 @@ body[data-conn="idle"] #btnConnect {
   }
 }
 
-/* ---- Reduced motion ------------------------------------------------------ */
+/* ---- 减弱动效 ----------------------------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {
   *,
