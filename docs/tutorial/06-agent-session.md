@@ -35,7 +35,7 @@ LiveKit CLI 会直接创建一个 job 并连接指定房间，不经过 worker �
 
 README 推荐本地用 `connect`，因为 `dev` 只注册 worker，不会主动进房，容易误以为“没反应”。
 
-> 如果 `livekit-server` 不在 PATH，参考根目录的 `install_livekit_tools.sh`（Linux/WSL）。
+> 如果 `livekit-server` 不在 PATH，参考 `scripts/install_livekit_tools.sh`（Linux/WSL）。
 
 ---
 

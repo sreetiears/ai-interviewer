@@ -1,10 +1,9 @@
-"""Interview-mode vocabulary shared by the graph, the agent and the HTTP server.
+"""图、智能体和 HTTP 服务共用的面试模式词汇表。
 
-This module deliberately imports nothing from the rest of the project and has no
-third-party dependencies.  The static-file server can therefore share the mode
-list without importing LiveKit or LangChain, and the graph can share it without
-importing the server.  Keeping the names in one place means a new mode cannot be
-half-added (for example accepted by ``/api/token`` but rejected by the graph).
+本模块刻意不导入项目其余部分，也没有第三方依赖。因此静态文件服务可以
+共用这份模式列表，而不必导入 LiveKit 或 LangChain；图也可以共用它，而不必
+导入服务端。名字集中在一处，新模式就不会只加一半（例如 ``/api/token`` 接受、
+图却拒绝）。
 """
 
 from __future__ import annotations
@@ -19,11 +18,11 @@ MODE_LABELS: dict[str, str] = {
 
 
 def normalize_mode(value: str | None) -> str:
-    """Map arbitrary user/config input onto a known mode name."""
+    """把任意用户或配置输入映射到已知的模式名。"""
     candidate = (value or "").strip().lower()
     return candidate if candidate in MODE_NAMES else DEFAULT_MODE
 
 
 def is_valid_mode(value: str | None) -> bool:
-    """True only for an exact, known mode name (after trimming/case folding)."""
+    """仅当（去空白、忽略大小写后）是已知模式名时返回 True。"""
     return (value or "").strip().lower() in MODE_NAMES

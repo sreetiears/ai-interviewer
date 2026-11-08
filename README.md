@@ -46,7 +46,7 @@
 - 关闭 `preemptive_generation`，避免推测执行导致一轮作答被重复消费（面试状态机有副作用，正确性优先）。
 - 出题时会带上"已经问过的问题"，降低 real 模式中重复出题的概率。
 - 服务端加固：`ThreadingHTTPServer`、路径穿越防护（unquote + realpath + commonpath）、移除通配 CORS（可选 `ALLOWED_ORIGIN` 白名单）、安全响应头、`Content-Length`/MIME/缓存策略、`GET /api/health`、token 默认 1 小时 TTL、UTF-8 安全的日志（中文 Windows 控制台不再因 emoji 崩溃）、端口占用友好报错与优雅退出。
-- 测试：105 个测试（状态机节点、真实图多轮流转、两种模式题量、LangGraph↔LiveKit 适配器事件与流式、Agent 装配与模式解析、HTTP 服务端 65 项、模式常量一致性），全部离线可跑。
+- 测试：148 个测试（状态机节点、真实图多轮流转、两种模式题量、LangGraph↔LiveKit 适配器事件与流式、Agent 装配与模式解析、HTTP 服务端、配置预检、模式常量一致性），全部离线可跑。
 
 ---
 
@@ -109,6 +109,17 @@ python -m pytest tests/
 
 ### 4. 本地启动
 
+**Windows 一键演示（推荐）**：先预检再开三个窗口（LiveKit / 前端 / Agent）：
+
+```powershell
+.\scripts\demo-preflight.ps1
+.\scripts\start-demo.ps1
+```
+
+Agent 启动前会检查 `LLM_API_KEY` / `SILICONFLOW_API_KEY`；缺 Key 会直接失败并提示，避免上台才发现。大厅页也会根据 `/api/health` 显示配置降级提示。
+
+也可手动开三个终端：
+
 #### 终端 1：启动 LiveKit Server
 
 ```bash
@@ -131,7 +142,7 @@ python server.py
 python agent.py connect --room ai-room
 ```
 
-> 若 `livekit-server` 不在 PATH，可参考根目录 `install_livekit_tools.sh`（Linux/WSL）。
+> 若 `livekit-server` 不在 PATH，可参考 `scripts/install_livekit_tools.sh`（Linux/WSL）。
 
 ---
 
@@ -145,6 +156,9 @@ python agent.py connect --room ai-room
 ├── interview_graph.py        # LangGraph 复试状态图、提示词、模式策略、成绩单
 ├── langgraph_adapter.py      # LangGraph ↔ LiveKit LLM 适配器（流式 + UI 事件）
 ├── server.py                 # 静态前端服务 + token 签发 + /api/health
+├── scripts/
+│   ├── demo-preflight.ps1    # Windows 演示预检
+│   └── start-demo.ps1        # Windows 三窗口一键启动
 ├── frontend/
 │   ├── index.html            # 面试工作台结构（无内联脚本/样式）
 │   ├── styles.css            # 克制的极简深色主题 + 响应式 + 动效
@@ -157,11 +171,16 @@ python agent.py connect --room ai-room
 │   ├── test_agent_stream.py       # Agent 装配、metadata 模式/会话解析
 │   ├── test_interview_modes.py    # 模式常量唯一来源
 │   └── test_server.py             # HTTP 服务端（65 项：路由/安全/缓存/模式）
+├── scripts/                  # Linux/WSL 辅助脚本（安装 LiveKit、重建 venv、导入检查）
+│   ├── install_livekit_tools.sh
+│   ├── rebuild_venv.sh
+│   ├── verify_agent_import.sh
+│   ├── verify_livekit_compat.sh
+│   └── verify_livekit_tools.sh
 ├── docs/
 │   ├── tutorial/             # 从零手搓本项目的教学文档（10 章）
-│   ├── reports/              # 架构审查 + 多模态替代方案报告
-│   ├── code-review.md        # 修复前 HEAD 的代码质量审查报告（历史）
-│   ├── optimization-report.md# 上一轮审查结论与修复记录（历史）
+│   ├── reports/              # 架构审查、多模态方案、历史代码审查与优化记录
+│   ├── adr/                  # 已落地的设计决定
 │   └── screenshots/          # 优化前后对比截图
 ├── requirements.txt
 ├── .env.example
@@ -210,7 +229,7 @@ self_intro ──合格──▶ pro_qa ──题量用尽──▶ compre_qa �
 - `/api/token` 默认**不做身份鉴权**，只适合本机/内网演示；公网暴露前请加鉴权与限流，并把 `FRONTEND_HOST` 收紧到 `127.0.0.1`。
 - `LIVEKIT_API_KEY/SECRET` 默认 `devkey/secret` 仅供 `livekit-server --dev`；生产必须替换为强随机密钥。
 - token 默认 1 小时过期（`TOKEN_TTL_SECONDS`），每次进入考场都会重新签发；不要把 TTL 调得过长。
-- 历史提交中曾出现明文 SiliconFlow API Key，若该 Key 仍有效请**立即吊销轮换**（详见 `docs/code-review.md` P1-8）。
+- 历史提交中曾出现明文 SiliconFlow API Key，若该 Key 仍有效请**立即吊销轮换**（详见 `docs/reports/code-review.md` P1-8）。
 - 成绩单目前只在浏览器会话内展示，未落库；如需存档请自行接入持久化。
 
 ---

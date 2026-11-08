@@ -375,7 +375,13 @@ def test_health_endpoint(http_port, monkeypatch):
     status, headers, body = http_request(http_port, "GET", "/api/health")
     assert status == 200
     assert headers["content-type"].startswith("application/json")
-    assert json.loads(body) == {"status": "ok", "deliveryMetrics": True}
+    payload = json.loads(body)
+    assert payload["deliveryMetrics"] is True
+    assert payload["status"] in ("ok", "degraded")
+    assert "llmConfigured" in payload
+    assert "speechConfigured" in payload
+    assert "defaultMode" in payload
+    assert isinstance(payload["issues"], list)
     assert headers["cache-control"] == "no-store"
 
 
@@ -383,6 +389,18 @@ def test_health_reports_delivery_switch(http_port, monkeypatch):
     monkeypatch.setenv("DELIVERY_METRICS", "0")
     _, _, body = http_request(http_port, "GET", "/api/health")
     assert json.loads(body)["deliveryMetrics"] is False
+
+
+def test_health_reports_degraded_when_keys_missing(http_port, monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "")
+    _, _, body = http_request(http_port, "GET", "/api/health")
+    payload = json.loads(body)
+    assert payload["status"] == "degraded"
+    assert payload["llmConfigured"] is False
+    assert payload["speechConfigured"] is False
+    assert payload["issues"]
+
 
 
 # ---------------------------------------------------------------------------

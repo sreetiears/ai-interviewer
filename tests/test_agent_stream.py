@@ -1,4 +1,4 @@
-"""Unit tests for the agent session wiring and interview-mode resolution."""
+"""智能体会话接线与面试模式解析的单元测试。"""
 import json
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -17,7 +17,7 @@ from langgraph_adapter import LangGraphLLM
 
 @pytest.mark.asyncio
 async def test_build_session_wires_langgraph_adapter_with_event_sink(monkeypatch):
-    async def sink(event):  # pragma: no cover - never called here
+    async def sink(event):  # pragma: no cover - 此处不会被调用
         return None
 
     monkeypatch.setattr("agent.silero.VAD.load", lambda **kwargs: object())
@@ -153,7 +153,7 @@ def test_resolve_interview_mode_from_participant_metadata():
 
 
 def test_agent_has_no_dify_backend():
-    """Dify support was removed; keep the module surface clean."""
+    """Dify 支持已移除；保持模块对外接口干净。"""
     import agent
 
     assert not hasattr(agent, "DifyLLM")

@@ -121,9 +121,11 @@ ai-interviewer/
 │   ├── test_langgraph_adapter.py
 │   ├── test_agent_stream.py
 │   └── test_server.py
+├── scripts/                  # Linux/WSL 辅助脚本，不参与运行时
 ├── docs/
 │   ├── tutorial/             # 你正在读的这套
-│   └── reports/              # 架构审查与多模态报告
+│   ├── reports/              # 架构审查、多模态方案与历史审查
+│   └── adr/
 ├── requirements.txt
 ├── .env.example
 └── README.md

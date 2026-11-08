@@ -1,9 +1,14 @@
 import os
 from dataclasses import dataclass
+from typing import Any
+
 from dotenv import load_dotenv
 
 # 若存在 .env，则自动加载其中的环境变量
 load_dotenv()
+
+# 仅允许在测试（ALLOW_DUMMY_KEYS=1）中使用；真实演示启动必须拒绝。
+DUMMY_API_KEY = "sk-dummy"
 
 
 def _env(name: str, default: str = "") -> str:
@@ -25,6 +30,27 @@ def _env_float(name: str, default: float) -> float:
         return float(val) if val is not None else default
     except ValueError:
         return default
+
+
+def allow_dummy_keys() -> bool:
+    """测试/离线装配时可显式允许占位 Key。"""
+    raw = os.getenv("ALLOW_DUMMY_KEYS", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def is_usable_api_key(value: str | None) -> bool:
+    key = (value or "").strip()
+    return bool(key) and key != DUMMY_API_KEY
+
+
+def resolve_api_key(value: str | None) -> str:
+    """返回可用 API Key；仅当 ALLOW_DUMMY_KEYS 打开时才回退到占位值。"""
+    key = (value or "").strip()
+    if is_usable_api_key(key):
+        return key
+    if allow_dummy_keys():
+        return DUMMY_API_KEY
+    return key
 
 
 @dataclass(frozen=True)
@@ -87,6 +113,62 @@ def delivery_metrics_enabled() -> bool:
     """成绩单是否读入表达特征。本地默认打开，评测时可关掉。"""
     raw = os.getenv("DELIVERY_METRICS", "1").strip().lower()
     return raw not in {"0", "false", "no", "off"}
+
+
+def check_runtime_readiness(
+    *,
+    llm_api_key: str | None = None,
+    siliconflow_api_key: str | None = None,
+) -> dict[str, Any]:
+    """检查演示运行所需的 Key 是否就绪（每次实时读 env，便于 health/预检）。"""
+    llm_key = llm_api_key if llm_api_key is not None else _env(
+        "LLM_API_KEY", _env("SILICONFLOW_API_KEY", "")
+    )
+    speech_key = (
+        siliconflow_api_key
+        if siliconflow_api_key is not None
+        else _env("SILICONFLOW_API_KEY", "")
+    )
+    llm_configured = is_usable_api_key(llm_key)
+    speech_configured = is_usable_api_key(speech_key)
+    issues: list[str] = []
+    if not llm_configured:
+        issues.append("缺少可用的 LLM_API_KEY（也可复用 SILICONFLOW_API_KEY）")
+    if not speech_configured:
+        issues.append("缺少可用的 SILICONFLOW_API_KEY（STT/TTS 需要）")
+    status = "ok" if not issues else "degraded"
+    return {
+        "status": status,
+        "llm_configured": llm_configured,
+        "speech_configured": speech_configured,
+        "issues": issues,
+    }
+
+
+def health_payload(*, default_mode: str = "quick") -> dict[str, Any]:
+    """``GET /api/health`` 用的结构化载荷（camelCase，给前端）。"""
+    readiness = check_runtime_readiness()
+    return {
+        "status": readiness["status"],
+        "deliveryMetrics": delivery_metrics_enabled(),
+        "llmConfigured": readiness["llm_configured"],
+        "speechConfigured": readiness["speech_configured"],
+        "defaultMode": default_mode,
+        "issues": list(readiness["issues"]),
+    }
+
+
+def assert_runtime_ready() -> None:
+    """Agent 启动前调用：未就绪则抛出带中文说明的 RuntimeError。"""
+    if allow_dummy_keys():
+        return
+    readiness = check_runtime_readiness()
+    if readiness["status"] == "ok":
+        return
+    detail = "；".join(readiness["issues"]) or "配置不完整"
+    raise RuntimeError(
+        f"{detail}。请检查 .env 后重试；无 Key 时可用浏览器 ?demo=1 演示界面。"
+    )
 
 
 config = InterviewConfig()

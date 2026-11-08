@@ -35,14 +35,14 @@ from urllib.parse import parse_qs, unquote, urlparse
 from dotenv import load_dotenv
 from livekit.api import AccessToken, VideoGrants
 
-from config import delivery_metrics_enabled
+from config import config as app_config, health_payload
 from interview_modes import DEFAULT_MODE, MODE_NAMES, is_valid_mode, normalize_mode
 
 load_dotenv()
 
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", "ws://127.0.0.1:7880")
+LIVEKIT_API_KEY = app_config.livekit_api_key
+LIVEKIT_API_SECRET = app_config.livekit_api_secret
+LIVEKIT_URL = app_config.livekit_url
 
 
 def _env_int(name: str, default: int) -> int:
@@ -393,7 +393,7 @@ class InterviewHttpHandler(BaseHTTPRequestHandler):
     def _handle_health(self) -> None:
         self._respond_json(
             HTTPStatus.OK,
-            {"status": "ok", "deliveryMetrics": delivery_metrics_enabled()},
+            health_payload(default_mode=_default_interview_mode()),
         )
 
     def _handle_token(self, parsed) -> None:

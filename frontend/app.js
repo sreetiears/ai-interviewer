@@ -231,6 +231,9 @@
   const reportTips = byId('reportTips');
   const reportClosing = byId('reportClosing');
   const deliveryNotice = byId('deliveryNotice');
+  const configBanner = byId('configBanner');
+  const configBannerText = byId('configBannerText');
+  const configDemoLink = byId('configDemoLink');
   const deliveryBlock = byId('deliveryBlock');
   const deliveryDisclaimer = byId('deliveryDisclaimer');
   const deliveryGrid = byId('deliveryGrid');
@@ -1907,12 +1910,35 @@
    * 启动
    * ------------------------------------------------------------------ */
 
-  function loadDeliveryNotice() {
-    if (IS_DEMO || !deliveryNotice) return;
+  function showConfigBanner(message) {
+    if (!configBanner || !configBannerText) return;
+    setText(configBannerText, message);
+    if (configDemoLink) {
+      var demoHref = '?demo=1';
+      if (interviewMode === 'real' || interviewMode === 'quick') {
+        demoHref += '&mode=' + encodeURIComponent(interviewMode);
+      }
+      configDemoLink.setAttribute('href', demoHref);
+    }
+    configBanner.hidden = false;
+  }
+
+  function loadHealthStatus() {
+    if (IS_DEMO) return;
     fetch('/api/health', { cache: 'no-store' })
       .then(function (response) { return response.ok ? response.json() : null; })
       .then(function (body) {
-        if (body && body.deliveryMetrics === true) deliveryNotice.hidden = false;
+        if (!body) return;
+        if (deliveryNotice && body.deliveryMetrics === true) deliveryNotice.hidden = false;
+        if (body.status === 'degraded') {
+          var issues = Array.isArray(body.issues) ? body.issues.filter(Boolean) : [];
+          var detail = issues.length
+            ? issues.join('；')
+            : '语音或大模型密钥尚未就绪';
+          showConfigBanner(
+            detail + '。真实语音面试可能无法启动；无 Key 时可先用演示模式走完全程。'
+          );
+        }
       })
       .catch(function () { /* 进场说明拿不到就保持关闭，避免在未测量时预告。 */ });
   }
@@ -1932,7 +1958,7 @@
     if (IS_DEMO) {
       initDemo();
     } else {
-      loadDeliveryNotice();
+      loadHealthStatus();
       logSystem('系统提示：点击「进入考场」开始模拟面试，系统将自动申请麦克风权限。');
       logSystem('面试流程：自我介绍 → 专业问答 → 综合素质 → 综合成绩单。');
       window.setTimeout(function () {

@@ -1,4 +1,4 @@
-"""The mode vocabulary must be the single source of truth for every layer."""
+"""模式词汇表必须是每一层的唯一事实来源。"""
 from interview_modes import DEFAULT_MODE, MODE_NAMES, is_valid_mode, normalize_mode
 
 

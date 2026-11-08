@@ -1,17 +1,16 @@
-"""Behavioural tests for the LangGraph <-> LiveKit adapter.
+"""LangGraph 与 LiveKit 适配器的行为测试。
 
-These tests exercise the real ``LLMStream`` plumbing (background task, async
-chunk iteration) with a fake graph, so the UI event contract and token streaming
-used by the web frontend are verified without any network access.
+这些测试用假图驱动真实的 ``LLMStream`` 管线（后台任务、异步分块迭代），
+从而在不访问网络的情况下，验证 Web 前端使用的界面事件协议和 token 流。
 """
 import pytest
 from livekit.agents import llm
 
-from langgraph_adapter import LangGraphLLM
+from langgraph_adapter import LangGraphLLM, user_facing_error_message
 
 
 class FakeGraph:
-    """Stand-in for the compiled LangGraph returning a canned state."""
+    """编译后 LangGraph 的替身，返回预设状态。"""
 
     def __init__(self, result: dict, custom_chunks: list[dict] | None = None) -> None:
         self.result = result
@@ -72,8 +71,7 @@ async def test_stream_forwards_custom_token_deltas_without_duplicating_reply():
 
     reply = await _read_reply(adapter.chat(chat_ctx=_user_chat_ctx("老师好")))
 
-    # Tokens arrive once through the custom stream; the final reply must not be
-    # appended a second time.
+    # token 只通过自定义流到达一次；最终回复不能再追加第二遍。
     assert reply == "你好，同学。"
 
 
@@ -129,7 +127,7 @@ async def test_unknown_interview_mode_falls_back_to_default():
 
 @pytest.mark.asyncio
 async def test_stream_without_user_message_skips_graph():
-    """An assistant-only context must not be replayed as a candidate answer."""
+    """只有助手消息的上下文不能被当成考生回答再放一遍。"""
     adapter = LangGraphLLM(thread_id="t-3")
     adapter.graph = FakeGraph({"reply": "不该被执行"})
     ctx = llm.ChatContext.empty()
@@ -143,7 +141,7 @@ async def test_stream_without_user_message_skips_graph():
 
 @pytest.mark.asyncio
 async def test_report_and_phase_are_emitted_once_per_session():
-    """Checkpointed state keeps report_data; the UI must not receive it twice."""
+    """检查点状态会一直保留 report_data；界面不能收到两次。"""
     report = {
         "total_score": 88,
         "scores": {"profession_know": 86, "exp_logic": 90, "comper_quality": 89},
@@ -166,7 +164,7 @@ async def test_report_and_phase_are_emitted_once_per_session():
 
 @pytest.mark.asyncio
 async def test_stream_falls_back_to_raw_report_text():
-    """A failed JSON parse still has final_report; the UI should get it."""
+    """JSON 解析失败时仍有 final_report；界面应该收到它。"""
     events: list[dict] = []
     adapter = LangGraphLLM(thread_id="t-6", on_event=events.append)
     adapter.graph = FakeGraph(
@@ -195,3 +193,31 @@ async def test_broken_event_sink_does_not_break_reply():
     adapter.graph = FakeGraph({"reply": "请继续。", "current_phase": "self_intro"})
 
     assert "请继续" in await _read_reply(adapter.chat(chat_ctx=_user_chat_ctx("你好")))
+
+
+def test_user_facing_error_message_classifies_common_failures():
+    assert "超时" in user_facing_error_message(TimeoutError("request timed out"))
+    assert "鉴权" in user_facing_error_message(RuntimeError("401 Unauthorized: invalid api key"))
+    assert "频繁" in user_facing_error_message(RuntimeError("429 Too Many Requests rate limit"))
+    assert "请稍后再试" in user_facing_error_message(RuntimeError("boom"))
+
+
+class BoomGraph:
+    def __init__(self, exc: BaseException) -> None:
+        self.exc = exc
+
+    async def astream(self, input_state, config=None, stream_mode=None):
+        raise self.exc
+        yield  # pragma: no cover - make this an async generator
+
+
+@pytest.mark.asyncio
+async def test_stream_speaks_classified_error_message():
+    events: list[dict] = []
+    adapter = LangGraphLLM(thread_id="t-err", on_event=events.append)
+    adapter.graph = BoomGraph(TimeoutError("deadline exceeded"))
+
+    reply = await _read_reply(adapter.chat(chat_ctx=_user_chat_ctx("老师好")))
+
+    assert "超时" in reply
+    assert {"type": "status", "state": "listening"} in events

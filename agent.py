@@ -18,7 +18,7 @@ from livekit.plugins.openai import tts as openai_tts_impl
 
 # 加载环境配置
 load_dotenv()
-from config import config, delivery_metrics_enabled
+from config import assert_runtime_ready, config, delivery_metrics_enabled, resolve_api_key
 from interview_modes import normalize_mode as normalize_interview_mode
 from langgraph_adapter import LangGraphLLM
 from perception.delivery import TurnDelivery, measure_turn
@@ -260,6 +260,7 @@ def _build_session(
         graph_llm=graph_llm,
         tap=tap,
     )
+    speech_api_key = resolve_api_key(config.siliconflow_api_key)
     session = voice.AgentSession(
         # 每次调用图都会推进面试状态，投机性的预生成可能把一轮消耗两次。
         # 正确性优先于一点点延迟收益。
@@ -273,14 +274,14 @@ def _build_session(
         ),
         stt=openai.STT(
             base_url=config.siliconflow_base_url,
-            api_key=config.siliconflow_api_key or "sk-dummy",
+            api_key=speech_api_key,
             model=config.stt_model,
             language=config.stt_language,
         ),
         llm=graph_llm,
         tts=SiliconFlowTTS(
             base_url=config.siliconflow_base_url,
-            api_key=config.siliconflow_api_key or "sk-dummy",
+            api_key=speech_api_key,
             model=config.tts_model,
             voice=config.tts_voice,
             response_format=config.tts_response_format,
@@ -290,6 +291,11 @@ def _build_session(
 
 
 async def entrypoint(ctx: JobContext) -> None:
+    try:
+        assert_runtime_ready()
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        raise
     logger.info("Received interview job for room: %s", ctx.room.name)
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     logger.info("Connected to room, waiting for participant...")
@@ -340,6 +346,11 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 if __name__ == "__main__":
+    try:
+        assert_runtime_ready()
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
     if len(sys.argv) > 1 and sys.argv[1] == "dev":
         logger.warning(
             "You started the agent with `dev`. This only registers a worker and waits for a job assignment. "

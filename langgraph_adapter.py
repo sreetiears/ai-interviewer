@@ -19,6 +19,37 @@ InterviewEvent = dict[str, Any]
 EventSink = Callable[[InterviewEvent], Awaitable[None] | None]
 
 
+def user_facing_error_message(exc: BaseException) -> str:
+    """把图执行异常映射成可播报的短中文，避免台上只听到笼统道歉。"""
+    name = type(exc).__name__.lower()
+    text = f"{name}: {exc}".lower()
+    joined = f"{name} {text}"
+    if any(
+        token in joined
+        for token in ("timeout", "timed out", "deadline", "readtimeout", "connecttimeout")
+    ):
+        return "考官思考超时了，请再说一遍你的回答。"
+    if any(
+        token in joined
+        for token in (
+            "401",
+            "403",
+            "unauthorized",
+            "invalid api key",
+            "authentication",
+            "api key",
+            "permissiondenied",
+        )
+    ):
+        return "语音服务鉴权失败，请检查 API Key 配置后重试。"
+    if any(
+        token in joined
+        for token in ("429", "rate limit", "too many requests", "quota", "ratelimit")
+    ):
+        return "当前请求过于频繁，请稍等几秒再试。"
+    return "系统处理出现异常，请稍后再试。"
+
+
 class LangGraphLLM(llm.LLM):
     """
     用 LangGraph 驱动多轮面试的 LiveKit LLM 适配器。
@@ -214,7 +245,7 @@ class LangGraphLLMStream(llm.LLMStream):
             except Exception as e:
                 logger.error("[LangGraphLLMStream] Error executing graph: %s", e, exc_info=True)
                 await graph_llm.emit_event({"type": "status", "state": "listening"})
-                self._send_chunk("系统处理出现异常，请稍后再试。")
+                self._send_chunk(user_facing_error_message(e))
 
     def _send_chunk(self, text: str) -> None:
         self._event_ch.send_nowait(
