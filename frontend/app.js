@@ -25,7 +25,25 @@
   let LK_EVENTS = LK && LK.RoomEvent ? LK.RoomEvent : {};
   let liveKitPromise = null;
 
-  const params = new URLSearchParams(window.location.search);
+  // 公网静态站（Cloudflare Pages 等）没有 /api/token；非本机访问时自动进入演示模式，
+  // 避免评委打开根地址后点「进入考场」失败。localhost 不跳转，保留真机联调。
+  var hostName = window.location.hostname;
+  var isLocalHost =
+    hostName === 'localhost' ||
+    hostName === '127.0.0.1' ||
+    hostName === '[::1]' ||
+    hostName === '0.0.0.0';
+  var bootSearch = new URLSearchParams(window.location.search);
+  if (!isLocalHost && bootSearch.get('demo') !== '1') {
+    bootSearch.set('demo', '1');
+    var bootQs = bootSearch.toString();
+    window.location.replace(
+      window.location.pathname + (bootQs ? '?' + bootQs : '') + window.location.hash
+    );
+    return;
+  }
+
+  const params = bootSearch;
   const IS_DEMO = params.get('demo') === '1';
   const DEMO_SCENE = IS_DEMO ? (params.get('scene') || 'auto') : null;
 
