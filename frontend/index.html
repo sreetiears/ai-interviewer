@@ -145,6 +145,14 @@
           </button>
         </div>
       </div>
+
+      <aside class="memory-panel" id="memoryPanel" hidden>
+        <p class="mode-label" id="memoryLabel">长期记忆</p>
+        <p class="memory-lead" id="memoryLead">根据你过往场次，建议本场加强以下方向。</p>
+        <ul class="memory-topics" id="memoryTopics" aria-labelledby="memoryLabel"></ul>
+        <p class="memory-weakness" id="memoryWeakness" hidden></p>
+        <button class="text-btn memory-focus-btn" id="memoryFocusBtn" type="button">针对薄弱点开练</button>
+      </aside>
     </main>
 
     <main class="session" aria-label="面试进行中">
@@ -328,6 +336,10 @@
             <h3>核心不足</h3>
             <p id="reportWeakness"></p>
           </div>
+          <div class="report-block" id="reportTopicsBlock" hidden>
+            <h3>本场薄弱知识点</h3>
+            <ul class="memory-topics memory-topics--report" id="reportTopics"></ul>
+          </div>
           <div class="report-block">
             <h3>改进建议</h3>
             <p id="reportTips"></p>
@@ -339,6 +351,7 @@
       </div>
 
       <div class="report-foot">
+        <button class="btn btn--quiet" id="reportFocusAgain" type="button" hidden>针对薄弱点再练</button>
         <button class="btn btn--quiet" id="reportAgain" type="button">再练一次</button>
         <button class="btn btn--primary" id="reportCloseBtn" type="button">返回考场</button>
       </div>

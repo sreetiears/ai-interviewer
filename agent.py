@@ -21,6 +21,7 @@ load_dotenv()
 from config import assert_runtime_ready, config, delivery_metrics_enabled, resolve_api_key
 from interview_modes import normalize_mode as normalize_interview_mode
 from langgraph_adapter import LangGraphLLM
+from learner_store import get_store, parse_focus_topics
 from perception.delivery import TurnDelivery, measure_turn
 
 logging.basicConfig(
@@ -86,6 +87,28 @@ def _resolve_interview_mode(participant: Any) -> str:
     if mode and resolved != str(mode).strip().lower():
         logger.warning("Unknown interview mode %r, falling back to %r", mode, resolved)
     return resolved
+
+
+def _resolve_learner_id(participant: Any, fallback_identity: str) -> str:
+    """读取考生档案 id；缺省时回退到 LiveKit identity。"""
+    payload = _participant_metadata(participant)
+    candidate = payload.get("learner_id")
+    if isinstance(candidate, str):
+        candidate = candidate.strip()
+        if candidate and SESSION_ID_RE.fullmatch(candidate):
+            return candidate
+    return _safe_identity(fallback_identity)
+
+
+def _resolve_focus_topics(participant: Any) -> list[str]:
+    """读取本场加强方向（复习入口传入）。"""
+    payload = _participant_metadata(participant)
+    raw = payload.get("focus_topics")
+    if isinstance(raw, list):
+        return parse_focus_topics(",".join(str(item) for item in raw))
+    if isinstance(raw, str):
+        return parse_focus_topics(raw)
+    return []
 
 
 class SiliconFlowTTS(openai_tts_impl.TTS):
@@ -239,20 +262,29 @@ def _build_session(
     on_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     interview_mode: str | None = None,
     thread_id: str | None = None,
+    learner_id: str | None = None,
+    focus_topics: list[str] | None = None,
+    profile_snapshot: str | None = None,
+    session_id: str | None = None,
 ) -> tuple[voice.Agent, voice.AgentSession]:
     user_id = _safe_identity(participant_identity)
     resolved_mode = normalize_interview_mode(interview_mode or config.interview_mode)
     resolved_thread = thread_id or user_id
     logger.info(
-        "Initializing LangGraph interview session for thread: %s (mode: %s)",
+        "Initializing LangGraph interview session for thread: %s (mode: %s, learner: %s)",
         resolved_thread,
         resolved_mode,
+        learner_id or user_id,
     )
 
     graph_llm = LangGraphLLM(
         thread_id=resolved_thread,
         on_event=on_event,
         interview_mode=resolved_mode,
+        learner_id=learner_id or user_id,
+        focus_topics=focus_topics or [],
+        profile_snapshot=profile_snapshot or "",
+        session_id=session_id or resolved_thread,
     )
     tap = _SpeechTap()
     agent_instance = InterviewAgent(
@@ -304,12 +336,22 @@ async def entrypoint(ctx: JobContext) -> None:
     participant_identity = participant.identity or f"candidate-{uuid.uuid4().hex[:6]}"
     interview_mode = _resolve_interview_mode(participant)
     session_id = _resolve_session_id(participant)
+    learner_id = _resolve_learner_id(participant, participant_identity)
+    focus_topics = _resolve_focus_topics(participant)
     thread_id = session_id or f"{ctx.room.name}:{_safe_identity(participant_identity)}"
+    profile_snapshot = ""
+    try:
+        snapshot = get_store().build_snapshot(learner_id, focus_topics=focus_topics)
+        profile_snapshot = snapshot.prompt_text()
+    except Exception:
+        logger.warning("Failed to load learner snapshot for %s", learner_id, exc_info=True)
     logger.info(
-        "Participant joined: %s (interview mode: %s, thread: %s)",
+        "Participant joined: %s (interview mode: %s, thread: %s, learner: %s, focus: %s)",
         participant_identity,
         interview_mode,
         thread_id,
+        learner_id,
+        focus_topics,
     )
 
     async def publish_event(event: dict[str, Any]) -> None:
@@ -329,6 +371,10 @@ async def entrypoint(ctx: JobContext) -> None:
         on_event=publish_event,
         interview_mode=interview_mode,
         thread_id=thread_id,
+        learner_id=learner_id,
+        focus_topics=focus_topics,
+        profile_snapshot=profile_snapshot,
+        session_id=session_id or thread_id,
     )
 
     logger.info("Starting voice session")

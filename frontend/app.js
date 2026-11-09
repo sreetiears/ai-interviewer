@@ -72,6 +72,25 @@
   const DEMO_EXAMINER_ID = 'examiner-ai';
 
   let interviewMode = params.get('mode') === 'real' ? 'real' : 'quick';
+  const LEARNER_STORAGE_KEY = 'ai_interview_learner_id';
+  const TOPIC_LABELS = {
+    'ds.structure': '数据结构',
+    'ds.algo': '算法',
+    'os.schedule': '操作系统·调度',
+    'os.memory': '操作系统·内存',
+    'os.fs': '操作系统·文件系统',
+    'cn.tcp': '计算机网络·TCP',
+    'cn.http': '计算机网络·HTTP',
+    'cn.routing': '计算机网络·路由',
+    'se.design': '系统设计',
+    'se.tradeoff': '系统设计·取舍',
+    'soft.motive': '读研动机',
+    'soft.plan': '职业规划',
+    'soft.research': '科研/竞赛经历',
+    'soft.team': '团队合作',
+    'soft.stress': '抗压'
+  };
+  let pendingFocusTopics = parseFocusParam(params.get('focus'));
 
   const DEMO_EXAM_1 =
     '同学你好，欢迎参加本次考研复试模拟面试。请先用一分钟左右做一个自我介绍，重点谈谈你的本科专业、科研经历和报考动机。';
@@ -96,7 +115,8 @@
     improvement_tips:
       '1. 回答专业问题前先用一句话给出结论，再展开 2–3 个支撑点，每个点配一个例子或对比。\n2. 针对简历里的科研经历，准备“背景—方法—结果—反思”四段式表述，方便追问时快速定位。\n3. 遇到不确定的问题，先界定概念范围再作答，避免直接套用相近术语。',
     closing:
-      '整体表达自然、节奏稳定，专业基础与临场应变都达到了复试要求。把“结论先行”练成习惯，你会更有把握。'
+      '整体表达自然、节奏稳定，专业基础与临场应变都达到了复试要求。把“结论先行”练成习惯，你会更有把握。',
+    weak_topics: ['os.memory', 'se.design']
   };
 
   /* 实战模式（real）演示脚本：多题 + 多次追问 */
@@ -230,6 +250,14 @@
   const reportWeakness = byId('reportWeakness');
   const reportTips = byId('reportTips');
   const reportClosing = byId('reportClosing');
+  const reportTopicsBlock = byId('reportTopicsBlock');
+  const reportTopics = byId('reportTopics');
+  const reportFocusAgain = byId('reportFocusAgain');
+  const memoryPanel = byId('memoryPanel');
+  const memoryLead = byId('memoryLead');
+  const memoryTopics = byId('memoryTopics');
+  const memoryWeakness = byId('memoryWeakness');
+  const memoryFocusBtn = byId('memoryFocusBtn');
   const deliveryNotice = byId('deliveryNotice');
   const configBanner = byId('configBanner');
   const configBannerText = byId('configBannerText');
@@ -269,13 +297,55 @@
     starting: false,
     room: null,
     localIdentity: '',
+    learnerId: '',
     report: null,
+    profile: null,
     demoActive: false,
     timerId: null,
     timerStart: 0,
     thinkingTimer: null,
     pageHiding: false
   };
+
+  function parseFocusParam(raw) {
+    if (!raw) return [];
+    return String(raw)
+      .split(/[,，\s]+/)
+      .map(function (item) { return item.trim(); })
+      .filter(function (item) { return item && TOPIC_LABELS[item]; });
+  }
+
+  function getOrCreateLearnerId() {
+    try {
+      const existing = window.localStorage.getItem(LEARNER_STORAGE_KEY);
+      if (existing && /^learner-[0-9a-f]{12}$/i.test(existing)) {
+        return existing;
+      }
+    } catch (error) { /* 隐私模式等 */ }
+    const id = 'learner-' + Math.random().toString(16).slice(2, 14).padEnd(12, '0');
+    try {
+      window.localStorage.setItem(LEARNER_STORAGE_KEY, id);
+    } catch (error) { /* 忽略 */ }
+    return id;
+  }
+
+  function topicLabel(topic) {
+    return TOPIC_LABELS[topic] || topic;
+  }
+
+  function renderTopicList(node, topics) {
+    if (!node) return;
+    node.replaceChildren();
+    (topics || []).forEach(function (topic) {
+      const li = document.createElement('li');
+      li.textContent = topicLabel(topic);
+      node.appendChild(li);
+    });
+  }
+
+  function setPendingFocus(topics) {
+    pendingFocusTopics = (topics || []).filter(Boolean).slice(0, 3);
+  }
 
   const segments = new Map();
   const audioEls = new Map();
@@ -900,6 +970,9 @@
     };
     const average = (dims.profession_know + dims.exp_logic + dims.comper_quality) / 3;
     const total = Number.isFinite(totalRaw) ? clamp(totalRaw, 0, 100) : Math.round(average);
+    const weakTopics = Array.isArray(raw.weak_topics)
+      ? raw.weak_topics.map(function (item) { return String(item || '').trim(); }).filter(Boolean)
+      : [];
     return {
       total: total,
       dims: dims,
@@ -907,7 +980,8 @@
       tips: typeof raw.improvement_tips === 'string' ? raw.improvement_tips.trim() : '',
       closing: typeof raw.closing === 'string' ? raw.closing.trim() : '',
       note: typeof raw.exp_logic_note === 'string' ? raw.exp_logic_note.trim() : '',
-      delivery: raw.delivery && typeof raw.delivery === 'object' ? raw.delivery : null
+      delivery: raw.delivery && typeof raw.delivery === 'object' ? raw.delivery : null,
+      weakTopics: weakTopics
     };
   }
 
@@ -999,6 +1073,19 @@
     setText(reportWeakness, data.weakness || '暂无');
     setText(reportTips, data.tips || '暂无');
     setText(reportClosing, data.closing || '');
+    if (reportTopicsBlock && reportTopics) {
+      const topics = data.weakTopics || [];
+      if (topics.length) {
+        reportTopicsBlock.hidden = false;
+        renderTopicList(reportTopics, topics);
+      } else {
+        reportTopicsBlock.hidden = true;
+        reportTopics.replaceChildren();
+      }
+    }
+    if (reportFocusAgain) {
+      reportFocusAgain.hidden = !(data.weakTopics && data.weakTopics.length) || IS_DEMO;
+    }
     renderDelivery(data);
   }
 
@@ -1065,6 +1152,9 @@
     setText(reportTips, '');
     setText(reportClosing, '');
     setText(reportRaw, '');
+    if (reportTopicsBlock) reportTopicsBlock.hidden = true;
+    if (reportTopics) reportTopics.replaceChildren();
+    if (reportFocusAgain) reportFocusAgain.hidden = true;
     if (deliveryBlock) deliveryBlock.hidden = true;
     if (deliveryGrid) deliveryGrid.textContent = '';
     if (deliveryMissing) {
@@ -1383,12 +1473,21 @@
     }
     LK_EVENTS = LK && LK.RoomEvent ? LK.RoomEvent : {};
 
-    logSystem('正在获取入场凭证（' + MODE_LABELS[interviewMode].name + '）…');
+    const learnerId = state.learnerId || getOrCreateLearnerId();
+    state.learnerId = learnerId;
+    const focusQuery = pendingFocusTopics.length
+      ? '&focus=' + encodeURIComponent(pendingFocusTopics.join(','))
+      : '';
+    logSystem(
+      '正在获取入场凭证（' + MODE_LABELS[interviewMode].name +
+      (pendingFocusTopics.length ? ' · 加强薄弱点' : '') + '）…'
+    );
 
     let room = null;
     try {
       const response = await fetch(
-        '/api/token?room=ai-room&mode=' + encodeURIComponent(interviewMode),
+        '/api/token?room=ai-room&mode=' + encodeURIComponent(interviewMode) +
+        '&identity=' + encodeURIComponent(learnerId) + focusQuery,
         {
           headers: { Accept: 'application/json' },
           cache: 'no-store'
@@ -1406,7 +1505,10 @@
           logSystem('服务端校准面试模式为' + MODE_LABELS[interviewMode].name + '。', 'warn');
         }
       }
-      state.localIdentity = connection.identity ? String(connection.identity) : '';
+      state.localIdentity = connection.identity ? String(connection.identity) : learnerId;
+      if (connection.learnerId) state.learnerId = String(connection.learnerId);
+      // 本场 focus 已写入令牌；清空待用队列，避免误带到下一场。
+      setPendingFocus([]);
 
       logSystem('正在连接考场' + (connection.roomName ? '「' + connection.roomName + '」' : '') + '…');
       room = new LK.Room({ adaptiveStream: true, dynacast: true });
@@ -1885,7 +1987,42 @@
     if (reportAgain) {
       reportAgain.addEventListener('click', function () {
         if (IS_DEMO) restartDemo();
-        else restartInterview();
+        else {
+          setPendingFocus([]);
+          restartInterview();
+        }
+      });
+    }
+    if (reportFocusAgain) {
+      reportFocusAgain.addEventListener('click', function () {
+        const reportData = state.report && state.report.kind === 'structured' ? state.report.data : null;
+        const topics = reportData && reportData.weakTopics ? reportData.weakTopics : [];
+        setPendingFocus(topics);
+        if (IS_DEMO) {
+          showToast('演示模式不会写入长期记忆，可退出演示后真实练习。', 'info');
+          return;
+        }
+        restartInterview();
+      });
+    }
+    if (memoryFocusBtn) {
+      memoryFocusBtn.addEventListener('click', function () {
+        const profile = state.profile;
+        const topics = profile && Array.isArray(profile.focusTopics)
+          ? profile.focusTopics
+          : (profile && Array.isArray(profile.weakTopics)
+            ? profile.weakTopics.map(function (item) { return item.topic; })
+            : []);
+        setPendingFocus(topics);
+        showToast(
+          topics.length
+            ? '已选定加强方向：' + topics.map(topicLabel).join('、')
+            : '暂无历史薄弱点，将按常规出题。',
+          'info'
+        );
+        if (state.conn === 'idle' || state.conn === 'ended' || state.conn === 'error') {
+          startInterview();
+        }
       });
     }
     if (reportLayer) {
@@ -1943,9 +2080,70 @@
       .catch(function () { /* 进场说明拿不到就保持关闭，避免在未测量时预告。 */ });
   }
 
+  function applyMemoryProfile(profile) {
+    state.profile = profile || null;
+    if (!memoryPanel) return;
+    if (!profile || !(profile.sessionCount > 0 || (profile.weakTopics && profile.weakTopics.length))) {
+      memoryPanel.hidden = true;
+      return;
+    }
+    memoryPanel.hidden = false;
+    const weak = Array.isArray(profile.weakTopics) ? profile.weakTopics : [];
+    const focus = Array.isArray(profile.focusTopics) && profile.focusTopics.length
+      ? profile.focusTopics
+      : weak.map(function (item) { return item.topic; });
+    if (memoryLead) {
+      setText(
+        memoryLead,
+        profile.sessionCount > 0
+          ? '已记录 ' + profile.sessionCount + ' 场练习。建议本场加强以下方向。'
+          : '根据你过往场次，建议本场加强以下方向。'
+      );
+    }
+    renderTopicList(memoryTopics, focus);
+    if (memoryWeakness) {
+      if (profile.recentWeakness) {
+        memoryWeakness.hidden = false;
+        setText(memoryWeakness, '上次核心不足：' + profile.recentWeakness);
+      } else {
+        memoryWeakness.hidden = true;
+        setText(memoryWeakness, '');
+      }
+    }
+  }
+
+  function loadLearnerProfile() {
+    if (IS_DEMO) {
+      applyMemoryProfile({
+        learnerId: 'learner-demo',
+        sessionCount: 1,
+        focusTopics: ['os.memory', 'cn.tcp'],
+        weakTopics: [
+          { topic: 'os.memory', label: '操作系统·内存', effective: 0.32 },
+          { topic: 'cn.tcp', label: '计算机网络·TCP', effective: 0.4 }
+        ],
+        recentWeakness: '虚拟内存与拥塞控制的边界条件仍不扎实。'
+      });
+      return;
+    }
+    const learnerId = state.learnerId || getOrCreateLearnerId();
+    state.learnerId = learnerId;
+    fetch(
+      '/api/learners/me/profile?learner_id=' + encodeURIComponent(learnerId),
+      { headers: { Accept: 'application/json' }, cache: 'no-store' }
+    )
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (body) {
+        if (!body) return;
+        applyMemoryProfile(body);
+      })
+      .catch(function () { /* 画像读不到时静默，不影响进场 */ });
+  }
+
   function init() {
     if (!transcriptEl) return;
     if (reportScroll) reportScroll.setAttribute('tabindex', '0');
+    state.learnerId = getOrCreateLearnerId();
     bindEvents();
     syncModeUI();
     resetReportUI();
@@ -1957,10 +2155,15 @@
 
     if (IS_DEMO) {
       initDemo();
+      loadLearnerProfile();
     } else {
       loadHealthStatus();
+      loadLearnerProfile();
       logSystem('系统提示：点击「进入考场」开始模拟面试，系统将自动申请麦克风权限。');
       logSystem('面试流程：自我介绍 → 专业问答 → 综合素质 → 综合成绩单。');
+      if (pendingFocusTopics.length) {
+        logSystem('本场将优先加强：' + pendingFocusTopics.map(topicLabel).join('、') + '。', 'info');
+      }
       window.setTimeout(function () {
         loadLiveKit().catch(function () { /* 连接时会再次尝试并给出内联错误 */ });
       }, 1500);

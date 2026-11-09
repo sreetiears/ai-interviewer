@@ -37,6 +37,7 @@ from livekit.api import AccessToken, VideoGrants
 
 from config import config as app_config, health_payload
 from interview_modes import DEFAULT_MODE, MODE_NAMES, is_valid_mode, normalize_mode
+from learner_store import get_store, parse_focus_topics
 
 load_dotenv()
 
@@ -181,18 +182,26 @@ def create_token(
     mode: str = DEFAULT_INTERVIEW_MODE,
     session_id: str | None = None,
     ttl_seconds: int | None = None,
+    focus_topics: list[str] | None = None,
 ) -> str:
-    """创建携带面试模式和会话 id 的 LiveKit JWT。
+    """创建携带面试模式、会话 id 与考生档案键的 LiveKit JWT。
 
-    ``mode`` 和 ``session_id`` 以 JSON 元数据存放，智能体可从
-    ``participant.metadata`` 读到。即使同一身份重新加入同一房间，会话 id
-    也让每场面试拥有自己的 LangGraph 检查点。两参数调用形式仍可供旧调用方使用。
+    ``mode``、``session_id``、``learner_id`` 和可选 ``focus_topics`` 以 JSON
+    元数据存放，智能体可从 ``participant.metadata`` 读到。``learner_id``
+    与 LiveKit identity 对齐（前端用本机持久化的考生档案 id 进房）。
+    即使同一身份重新加入同一房间，会话 id 也让每场面试拥有自己的
+    LangGraph 检查点。两参数调用形式仍可供旧调用方使用。
     """
     resolved_session = session_id or uuid.uuid4().hex
-    metadata = json.dumps(
-        {"interview_mode": mode, "session_id": resolved_session},
-        ensure_ascii=False,
-    )
+    payload: dict = {
+        "interview_mode": mode,
+        "session_id": resolved_session,
+        "learner_id": identity,
+    }
+    focuses = [t for t in (focus_topics or []) if t]
+    if focuses:
+        payload["focus_topics"] = focuses
+    metadata = json.dumps(payload, ensure_ascii=False)
     ttl = TOKEN_TTL_SECONDS if ttl_seconds is None else int(ttl_seconds)
     token = (
         AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
@@ -386,6 +395,10 @@ class InterviewHttpHandler(BaseHTTPRequestHandler):
             self._handle_health()
         elif path == "/api/token":
             self._handle_token(parsed)
+        elif path == "/api/learners/me/profile":
+            self._handle_learner_profile(parsed)
+        elif path == "/api/learners/me/sessions":
+            self._handle_learner_sessions(parsed)
         else:
             self._handle_static(path)
 
@@ -450,17 +463,120 @@ class InterviewHttpHandler(BaseHTTPRequestHandler):
             )
             return
 
-        jwt_token = create_token(room_name, identity, mode)
+        focus_raw = (params.get("focus", [""])[0] or "").strip()
+        focus_topics = parse_focus_topics(focus_raw)
+        try:
+            get_store().ensure_learner(identity)
+        except Exception:
+            logger.warning("Failed to ensure learner %s", identity, exc_info=True)
+
+        jwt_token = create_token(
+            room_name,
+            identity,
+            mode,
+            focus_topics=focus_topics or None,
+        )
         self._respond_json(
             HTTPStatus.OK,
             {
                 "serverUrl": LIVEKIT_URL,
                 "roomName": room_name,
                 "identity": identity,
+                "learnerId": identity,
                 "token": jwt_token,
                 "interviewMode": mode,
+                "focusTopics": focus_topics,
             },
         )
+
+    def _parse_learner_query(self, parsed) -> tuple[str | None, dict | None]:
+        """解析 learner_id；失败时返回 (None, 已写出的错误响应 payload 无需再写)。
+
+        第二个返回值非空表示已响应该错误。
+        """
+        if len(parsed.query) > MAX_QUERY_LENGTH:
+            self._respond_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "query string too long", "limit": MAX_QUERY_LENGTH},
+            )
+            return None, {"written": True}
+        try:
+            params = parse_qs(
+                parsed.query,
+                keep_blank_values=True,
+                max_num_fields=MAX_QUERY_FIELDS,
+            )
+        except ValueError:
+            self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "invalid query string"})
+            return None, {"written": True}
+
+        learner_id = (params.get("learner_id", [""])[0] or "").strip()
+        if not learner_id:
+            self._respond_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "missing learner_id"},
+            )
+            return None, {"written": True}
+        if not _is_valid_identifier(learner_id):
+            self._respond_json(
+                HTTPStatus.BAD_REQUEST,
+                {
+                    "error": "invalid learner_id",
+                    "detail": "learner_id must match %s" % IDENTIFIER_RE.pattern,
+                },
+            )
+            return None, {"written": True}
+        return learner_id, None
+
+    def _handle_learner_profile(self, parsed) -> None:
+        learner_id, err = self._parse_learner_query(parsed)
+        if err:
+            return
+        assert learner_id is not None
+        try:
+            store = get_store()
+            focus_raw = ""
+            try:
+                params = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=MAX_QUERY_FIELDS)
+                focus_raw = (params.get("focus", [""])[0] or "").strip()
+            except ValueError:
+                focus_raw = ""
+            snapshot = store.build_snapshot(
+                learner_id,
+                focus_topics=parse_focus_topics(focus_raw),
+            )
+            self._respond_json(HTTPStatus.OK, snapshot.to_dict())
+        except Exception:
+            logger.warning("Failed to load profile for %s", learner_id, exc_info=True)
+            self._respond_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": "profile unavailable"},
+            )
+
+    def _handle_learner_sessions(self, parsed) -> None:
+        learner_id, err = self._parse_learner_query(parsed)
+        if err:
+            return
+        assert learner_id is not None
+        limit = 10
+        try:
+            params = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=MAX_QUERY_FIELDS)
+            raw_limit = (params.get("limit", ["10"])[0] or "10").strip()
+            limit = max(1, min(50, int(raw_limit)))
+        except (ValueError, TypeError):
+            limit = 10
+        try:
+            sessions = get_store().list_sessions(learner_id, limit=limit)
+            self._respond_json(
+                HTTPStatus.OK,
+                {"learnerId": learner_id, "sessions": sessions},
+            )
+        except Exception:
+            logger.warning("Failed to list sessions for %s", learner_id, exc_info=True)
+            self._respond_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": "sessions unavailable"},
+            )
 
     # -- 静态文件 -------------------------------------------------------------
     def _handle_static(self, request_path: str) -> None:

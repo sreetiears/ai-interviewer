@@ -67,6 +67,10 @@ class LangGraphLLM(llm.LLM):
         thread_id: str | None = None,
         on_event: EventSink | None = None,
         interview_mode: str | None = None,
+        learner_id: str | None = None,
+        focus_topics: list[str] | None = None,
+        profile_snapshot: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         super().__init__()
         self.thread_id = thread_id or str(uuid.uuid4())
@@ -75,6 +79,10 @@ class LangGraphLLM(llm.LLM):
         self.api_lock = asyncio.Lock()
         self._on_event = on_event
         self.interview_mode = normalize_interview_mode(interview_mode or config.interview_mode)
+        self.learner_id = (learner_id or "").strip()
+        self.focus_topics = [str(t).strip() for t in (focus_topics or []) if str(t).strip()]
+        self.profile_snapshot = str(profile_snapshot or "").strip()
+        self.session_id = (session_id or self.thread_id).strip()
         # 图会在轮次之间把状态写入检查点，因此 ``report_data`` 和
         # ``current_phase`` 会留到后续轮次。记住界面已经收到过什么，
         # 否则面试结束后考生再说一句话，结束成绩单就会再弹一次。
@@ -195,6 +203,10 @@ class LangGraphLLMStream(llm.LLMStream):
                 input_state = {
                     "user_query": self._query,
                     "interview_mode": graph_llm.interview_mode,
+                    "learner_id": graph_llm.learner_id,
+                    "session_id": graph_llm.session_id,
+                    "focus_topics": ",".join(graph_llm.focus_topics),
+                    "profile_snapshot": graph_llm.profile_snapshot,
                 }
                 if delivery_metrics_enabled():
                     input_state["delivery_turns"] = [

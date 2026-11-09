@@ -214,15 +214,18 @@ def test_token_endpoint_contract(http_port, monkeypatch):
     assert status == 200
     assert headers["content-type"].startswith("application/json")
     payload = json.loads(body)
-    assert set(payload) == {
+    assert set(payload) >= {
         "serverUrl",
         "roomName",
         "identity",
         "token",
         "interviewMode",
+        "learnerId",
+        "focusTopics",
     }
     assert payload["roomName"] == "secure-room"
     assert payload["identity"] == "candidate-1"
+    assert payload["learnerId"] == "candidate-1"
     assert payload["serverUrl"] == server.LIVEKIT_URL
     assert payload["interviewMode"] == "quick"
 
@@ -233,6 +236,7 @@ def test_token_endpoint_contract(http_port, monkeypatch):
     metadata = json.loads(claims["metadata"])
     assert metadata["interview_mode"] == "quick"
     assert metadata["session_id"]
+    assert metadata["learner_id"] == "candidate-1"
 
 
 def test_token_endpoint_defaults(http_port, monkeypatch):
@@ -240,12 +244,14 @@ def test_token_endpoint_defaults(http_port, monkeypatch):
     status, _, body = http_request(http_port, "GET", "/api/token")
     assert status == 200
     payload = json.loads(body)
-    assert set(payload) == {
+    assert set(payload) >= {
         "serverUrl",
         "roomName",
         "identity",
         "token",
         "interviewMode",
+        "learnerId",
+        "focusTopics",
     }
     assert payload["roomName"] == "ai-room"
     assert payload["identity"].startswith("candidate-")
@@ -253,6 +259,7 @@ def test_token_endpoint_defaults(http_port, monkeypatch):
     metadata = token_metadata(payload["token"])
     assert metadata["interview_mode"] == "quick"
     assert metadata["session_id"]
+    assert metadata["learner_id"] == payload["identity"]
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +347,76 @@ def test_create_token_gets_a_fresh_session_id_per_token():
     first = token_metadata(create_token("room", "same-user"))
     second = token_metadata(create_token("room", "same-user"))
     assert first["session_id"] != second["session_id"]
+    assert first["learner_id"] == "same-user"
+
+
+def test_create_token_includes_focus_topics():
+    metadata = token_metadata(
+        create_token("room", "learner-aaaabbbbcccc", focus_topics=["os.memory", "cn.tcp"])
+    )
+    assert metadata["focus_topics"] == ["os.memory", "cn.tcp"]
+    assert metadata["learner_id"] == "learner-aaaabbbbcccc"
+
+
+def test_token_endpoint_accepts_focus_query(http_port, tmp_path, monkeypatch):
+    from learner_store import LearnerStore
+
+    store = LearnerStore(tmp_path / "kb.sqlite3")
+    monkeypatch.setattr(server, "get_store", lambda: store)
+    status, _, body = http_request(
+        http_port,
+        "GET",
+        "/api/token?identity=learner-aaaabbbbcccc&focus=os.memory,cn.tcp",
+    )
+    assert status == 200
+    payload = json.loads(body)
+    assert payload["focusTopics"] == ["os.memory", "cn.tcp"]
+    assert token_metadata(payload["token"])["focus_topics"] == ["os.memory", "cn.tcp"]
+
+
+def test_learner_profile_and_sessions_api(http_port, tmp_path, monkeypatch):
+    from learner_store import LearnerStore
+
+    store = LearnerStore(tmp_path / "kb.sqlite3")
+    monkeypatch.setattr(server, "get_store", lambda: store)
+    store.record_session(
+        learner_id="learner-profile0001",
+        session_id="s1",
+        mode="quick",
+        report={
+            "total_score": 70,
+            "core_weakness": "内存管理薄弱",
+            "weak_topics": ["os.memory"],
+        },
+        turn_records=[{"topic": "os.memory", "verdict": "weak", "question": "缺页？"}],
+    )
+
+    status, _, body = http_request(
+        http_port,
+        "GET",
+        "/api/learners/me/profile?learner_id=learner-profile0001",
+    )
+    assert status == 200
+    profile = json.loads(body)
+    assert profile["learnerId"] == "learner-profile0001"
+    assert profile["sessionCount"] >= 1
+    assert profile["recentWeakness"] == "内存管理薄弱"
+
+    status, _, body = http_request(
+        http_port,
+        "GET",
+        "/api/learners/me/sessions?learner_id=learner-profile0001&limit=5",
+    )
+    assert status == 200
+    sessions = json.loads(body)
+    assert sessions["learnerId"] == "learner-profile0001"
+    assert len(sessions["sessions"]) == 1
+
+
+def test_learner_profile_requires_id(http_port):
+    status, _, body = http_request(http_port, "GET", "/api/learners/me/profile")
+    assert status == 400
+    assert json.loads(body)["error"] == "missing learner_id"
 
 
 def test_create_token_ttl_is_bounded(monkeypatch):

@@ -103,6 +103,10 @@ class InterviewConfig:
     )
     real_max_intro_attempts: int = _env_int("REAL_MAX_INTRO_ATTEMPTS", 3)
 
+    # 考生长期记忆 / 个人知识库（SQLite）
+    learner_db_path: str = _env("LEARNER_DB_PATH", "data/learner_kb.sqlite3")
+    mastery_half_life_days: float = _env_float("MASTERY_HALF_LIFE_DAYS", 30.0)
+
 
 def listen_bakeoff_dirs() -> tuple[str, str]:
     """离线横评的录音目录和记录目录。都由本机配置给出，不指向仓库内。"""

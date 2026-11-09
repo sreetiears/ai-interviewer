@@ -4,11 +4,14 @@ from langchain_core.messages import AIMessage
 from interview_graph import (
     _build_report_payload,
     _needs_followup,
+    _parse_judge_payload,
+    _question_prompt,
     node_self_intro,
     node_pro_qa,
     node_compre_qa,
     node_report,
 )
+from learner_store import PRO_TOPICS
 
 
 @pytest.mark.asyncio
@@ -139,11 +142,45 @@ def test_needs_followup_normalizes_judge_output():
     assert _needs_followup("") is False
 
 
+def test_parse_judge_payload_accepts_json_and_legacy_text():
+    parsed = _parse_judge_payload(
+        '{"followup":"需要","topic":"os.memory","verdict":"weak"}',
+        allowed_topics=frozenset(PRO_TOPICS),
+        default_topic="se.design",
+    )
+    assert parsed == {"followup": "需要", "topic": "os.memory", "verdict": "weak"}
+
+    legacy = _parse_judge_payload(
+        "不需要",
+        allowed_topics=frozenset(PRO_TOPICS),
+        default_topic="se.design",
+    )
+    assert legacy["followup"] == "不需要"
+    assert legacy["topic"] == "se.design"
+    assert legacy["verdict"] == "ok"
+
+
+def test_question_prompt_includes_focus_and_snapshot():
+    prompt = _question_prompt(
+        "请出一道题",
+        {
+            "asked_questions": "- 旧题\n",
+            "focus_topics": "os.memory,cn.tcp",
+            "profile_snapshot": "历史薄弱点：操作系统·内存",
+        },
+    )
+    assert "旧题" in prompt
+    assert "历史薄弱点" in prompt
+    assert "操作系统·内存" in prompt
+    assert "计算机网络·TCP" in prompt
+
+
 def test_build_report_payload_clamps_and_defaults_scores():
     payload = _build_report_payload(
         {
             "total_score": 86,
             "scores": {"profession_know": 150, "exp_logic": "88", "comper_quality": None},
+            "weak_topics": ["os.memory", "bogus"],
         }
     )
 
@@ -154,6 +191,7 @@ def test_build_report_payload_clamps_and_defaults_scores():
     assert payload["core_weakness"]
     assert payload["improvement_tips"]
     assert payload["closing"]
+    assert payload["weak_topics"] == ["os.memory"]
 
 
 def test_report_text_names_expression_logic_and_keeps_the_note():
@@ -353,6 +391,8 @@ async def test_next_question_prompt_includes_questions_already_asked():
     assert "第一道专业课问题" in question_prompt
     assert "第二道专业课问题" in result["asked_questions"]
     assert "第一道专业课问题" in result["asked_questions"]
+    assert "turn_tags" in result
+    assert "os." in result["turn_tags"] or "se." in result["turn_tags"] or "ds." in result["turn_tags"] or "cn." in result["turn_tags"]
 
 
 @pytest.mark.asyncio

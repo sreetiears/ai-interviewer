@@ -12,6 +12,15 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from config import config, delivery_metrics_enabled, resolve_api_key
 from interview_modes import DEFAULT_MODE, normalize_mode as normalize_interview_mode
+from learner_store import (
+    PRO_TOPICS,
+    SOFT_TOPICS,
+    TOPIC_LABELS,
+    get_store,
+    normalize_topic,
+    normalize_verdict,
+    parse_focus_topics,
+)
 from perception.report_text import build_report_user_content, delivery_report
 
 logger = logging.getLogger("interview-langgraph")
@@ -44,6 +53,13 @@ class InterviewState(TypedDict):
     report_data: dict[str, Any]
     # 各轮表达特征。出题和追问不读它。
     delivery_turns: list
+    # 跨场长期记忆：考生档案 id、本场会话 id、加强方向与开场画像摘要。
+    learner_id: str
+    session_id: str
+    focus_topics: str
+    profile_snapshot: str
+    # 本场结构化评答记录（每行一条 JSON），终局写回知识库。
+    turn_tags: str
 
 
 # ==========================================
@@ -66,15 +82,23 @@ UNQUALIFY_SYSTEM = (
 PRO_QUESTION_SYSTEM = (
     "身份：你是计算机/软件工程考研复试的专业课面试官。\n"
     "性格：严谨。一次只问一件事。\n"
-    "任务：从数据结构、操作系统、计算机网络、系统设计里出题。每次只问一个能口头答完的机制、取舍或故障。不考名词背诵。不重复已经问过的问题。\n"
+    "任务：从数据结构、操作系统、计算机网络、系统设计里出题。每次只问一个能口头答完的机制、取舍或故障。不考名词背诵。不重复已经问过的问题。"
+    "若提示里给出了优先加强方向，本场至少一半主题目对准这些方向，其余可覆盖其他范围。\n"
     "输出：纯台词，不要前缀，不要泄题，不要连环问。50 字以内。"
 )
 
+_PRO_TOPIC_LIST = "、".join(PRO_TOPICS)
 PRO_JUDGE_SYSTEM = (
     "身份：你是计算机/软件工程考研复试的专业课评判。\n"
     "性格：严谨。只做判断，不解释。\n"
-    "任务：回答过于简略、只停留在表面概念、或漏了核心原理，输出需要。回答已经覆盖核心知识点，或考生明确说完全不会，输出不需要。\n"
-    "输出：只能是「需要」或「不需要」。"
+    "任务：判断是否需要追问，并给本题打一个知识点标签和掌握判定。\n"
+    f"topic 只能从这些里选一个：{_PRO_TOPIC_LIST}。\n"
+    "verdict：strong=覆盖核心且清楚；ok=基本到位但可更好；weak=简略/表面/漏原理；"
+    "unknown=考生明确说完全不会。\n"
+    "followup：回答过于简略、只停留在表面概念、或漏了核心原理时为「需要」；"
+    "已经覆盖核心，或 verdict 为 unknown 时为「不需要」。\n"
+    "输出：只能是合法 JSON，不要其它文字：\n"
+    '{"followup":"需要|不需要","topic":"os.memory","verdict":"weak|ok|strong|unknown"}'
 )
 
 PRO_FOLLOWUP_SYSTEM = (
@@ -94,15 +118,22 @@ TRANSITION_TO_COMPRE_SYSTEM = (
 COMPRE_QUESTION_SYSTEM = (
     "身份：你是考研复试的面试官。\n"
     "性格：温和、严谨。一次只问一件事。\n"
-    "任务：从读研动机、职业规划、科研或竞赛经历、团队合作冲突、抗压里挑一个，问一个具体场景。不评价考生的性格。\n"
+    "任务：从读研动机、职业规划、科研或竞赛经历、团队合作冲突、抗压里挑一个，问一个具体场景。不评价考生的性格。"
+    "若提示里给出了优先加强方向，尽量对准这些方向出题，仍不重复已问。\n"
     "输出：纯台词，不要前缀，不要连环问。60 字以内。"
 )
 
+_SOFT_TOPIC_LIST = "、".join(SOFT_TOPICS)
 COMPRE_JUDGE_SYSTEM = (
     "身份：你是考研复试综合素质的评判。\n"
     "性格：严谨。只做判断，不解释。\n"
-    "任务：回答简略、空洞、或没有具体事例，输出需要。回答已经有事例而且把事情说清，或考生没有相关经历，输出不需要。\n"
-    "输出：只能是「需要」或「不需要」。"
+    "任务：判断是否需要追问，并给本题打一个综合素质标签和掌握判定。\n"
+    f"topic 只能从这些里选一个：{_SOFT_TOPIC_LIST}。\n"
+    "verdict：strong=有具体事例且说清；ok=基本到位；weak=简略/空洞；"
+    "unknown=考生明确没有相关经历。\n"
+    "followup：简略、空洞或没有具体事例时为「需要」；已有事例说清，或 verdict 为 unknown 时为「不需要」。\n"
+    "输出：只能是合法 JSON，不要其它文字：\n"
+    '{"followup":"需要|不需要","topic":"soft.team","verdict":"weak|ok|strong|unknown"}'
 )
 
 COMPRE_FOLLOWUP_SYSTEM = (
@@ -167,11 +198,19 @@ def _get_llm(temperature: float = 0.5) -> ChatOpenAI:
 
 
 def _question_prompt(base: str, state: InterviewState) -> str:
-    """把已经问过的问题追加到出题提示词后面。"""
+    """把已经问过的问题、跨场画像与加强方向追加到出题提示词后面。"""
+    parts = [base]
     asked = str(state.get("asked_questions", "") or "").strip()
-    if not asked:
-        return base
-    return f"{base}\n\n已经问过的问题（不要重复，也不要换汤不换药）：\n{asked}"
+    if asked:
+        parts.append(f"已经问过的问题（不要重复，也不要换汤不换药）：\n{asked}")
+    snapshot = str(state.get("profile_snapshot", "") or "").strip()
+    if snapshot:
+        parts.append(snapshot)
+    focus = parse_focus_topics(state.get("focus_topics"))
+    if focus:
+        labels = [TOPIC_LABELS.get(t, t) for t in focus]
+        parts.append("本场必须优先加强：" + "、".join(labels))
+    return "\n\n".join(parts)
 
 
 def _remember_question(state: InterviewState, question: str) -> str:
@@ -182,10 +221,102 @@ def _needs_followup(judge_text: str) -> bool:
     """把评判模型的自由文本归一成是否追问的决定。
 
     评判提示词要求只输出“需要”或“不需要”；模型仍偶尔会包上标点或多余文字，
-    因此先匹配否定说法。
+    因此先匹配否定说法。结构化 JSON 走 ``_parse_judge_payload``。
     """
     normalized = judge_text.strip()
     return "需要" in normalized and "不需要" not in normalized
+
+
+def _parse_judge_payload(
+    raw: str,
+    *,
+    allowed_topics: frozenset[str] | set[str],
+    default_topic: str,
+) -> dict[str, Any]:
+    """解析评答 JSON；失败时回退到旧的「需要/不需要」文本约定。"""
+    text = str(raw or "").strip()
+    text = re.sub(r"^```json\s*", "", text)
+    text = re.sub(r"\s*```$", "", text).strip()
+    data: dict[str, Any] | None = None
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            data = parsed
+    except (TypeError, ValueError):
+        data = None
+
+    if data is None:
+        followup = "需要" if _needs_followup(text) else "不需要"
+        return {
+            "followup": followup,
+            "topic": default_topic,
+            "verdict": "weak" if followup == "需要" else "ok",
+        }
+
+    followup_raw = str(data.get("followup") or "").strip()
+    if "不需要" in followup_raw:
+        followup = "不需要"
+    elif "需要" in followup_raw:
+        followup = "需要"
+    else:
+        followup = "需要" if _needs_followup(followup_raw or text) else "不需要"
+
+    topic = normalize_topic(str(data.get("topic") or ""))
+    if topic not in allowed_topics:
+        topic = default_topic if default_topic in allowed_topics else next(iter(allowed_topics))
+
+    verdict = normalize_verdict(str(data.get("verdict") or ""))
+    if followup == "需要" and verdict == "ok":
+        verdict = "weak"
+    if verdict == "unknown":
+        followup = "不需要"
+    return {"followup": followup, "topic": topic, "verdict": verdict}
+
+
+def _remember_turn_tag(
+    state: InterviewState,
+    *,
+    question: str,
+    topic: str,
+    verdict: str,
+    followup: str,
+) -> str:
+    record = {
+        "question": str(question or "").strip(),
+        "topic": topic,
+        "verdict": verdict,
+        "followup": followup,
+    }
+    line = json.dumps(record, ensure_ascii=False)
+    prior = str(state.get("turn_tags", "") or "").rstrip()
+    if prior:
+        return prior + "\n" + line
+    return line
+
+
+def _parse_turn_tags(raw: str | None) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for line in str(raw or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(item, dict):
+            records.append(item)
+    return records
+
+
+def _weak_topics_from_turns(records: list[dict[str, Any]]) -> list[str]:
+    out: list[str] = []
+    for item in records:
+        topic = normalize_topic(str(item.get("topic") or ""))
+        verdict = normalize_verdict(str(item.get("verdict") or ""))
+        if topic and verdict in {"weak", "unknown"} and topic not in out:
+            out.append(topic)
+    return out
 
 
 # ==========================================
@@ -358,13 +489,26 @@ async def node_pro_qa(state: InterviewState) -> dict:
     # 考生已经回答了这道题
     archive = state.get("raw_scores", "") + f"【专业提问】\n{current_q}\n【考生回答】\n{query}\n"
 
-    # 判断是否需要追问
+    # 判断是否需要追问，并打知识点标签
     judge_llm = _get_llm(temperature=0.1)
     judge_res = await judge_llm.ainvoke([
         SystemMessage(content=PRO_JUDGE_SYSTEM),
         HumanMessage(content=f"【考官问题】{current_q}\n【考生回答】{query}"),
     ])
-    need_followup = _needs_followup(judge_res.content)
+    judgment = _parse_judge_payload(
+        str(judge_res.content),
+        allowed_topics=frozenset(PRO_TOPICS),
+        default_topic="se.design",
+    )
+    need_followup = judgment["followup"] == "需要"
+    turn_tags = _remember_turn_tag(
+        state,
+        question=current_q,
+        topic=judgment["topic"],
+        verdict=judgment["verdict"],
+        followup=judgment["followup"],
+    )
+    tagged_state = {**state, "turn_tags": turn_tags}
 
     if need_followup and follow_up_count < settings["max_follow_ups"]:
         logger.info("[LangGraph] Pro QA triggering follow-up")
@@ -383,6 +527,7 @@ async def node_pro_qa(state: InterviewState) -> dict:
             "questions_asked": questions_asked,
             "asked_questions": _remember_question(state, followup_q),
             "raw_scores": archive,
+            "turn_tags": turn_tags,
         }
 
     if questions_asked < settings["questions_per_phase"]:
@@ -398,7 +543,7 @@ async def node_pro_qa(state: InterviewState) -> dict:
                 HumanMessage(
                     content=_question_prompt(
                         "请再出一道题，不要重复已经问过的。仍只问一个机制、取舍或故障。",
-                        state,
+                        tagged_state,
                     )
                 ),
             ],
@@ -411,6 +556,7 @@ async def node_pro_qa(state: InterviewState) -> dict:
             "questions_asked": questions_asked + 1,
             "asked_questions": _remember_question(state, next_question),
             "raw_scores": archive,
+            "turn_tags": turn_tags,
         }
 
     logger.info("[LangGraph] Pro QA finished, moving to compre_qa")
@@ -429,6 +575,7 @@ async def node_pro_qa(state: InterviewState) -> dict:
         "questions_asked": 0,
         "asked_questions": "",
         "raw_scores": archive,
+        "turn_tags": turn_tags,
     }
 
 
@@ -479,7 +626,20 @@ async def node_compre_qa(state: InterviewState) -> dict:
         SystemMessage(content=COMPRE_JUDGE_SYSTEM),
         HumanMessage(content=f"【综合问题】{current_q}\n【考生回答】{query}"),
     ])
-    need_followup = _needs_followup(judge_res.content)
+    judgment = _parse_judge_payload(
+        str(judge_res.content),
+        allowed_topics=frozenset(SOFT_TOPICS),
+        default_topic="soft.motive",
+    )
+    need_followup = judgment["followup"] == "需要"
+    turn_tags = _remember_turn_tag(
+        state,
+        question=current_q,
+        topic=judgment["topic"],
+        verdict=judgment["verdict"],
+        followup=judgment["followup"],
+    )
+    tagged_state = {**state, "turn_tags": turn_tags, "raw_scores": archive}
 
     if need_followup and follow_up_count < settings["max_follow_ups"]:
         logger.info("[LangGraph] Compre QA triggering follow-up")
@@ -498,6 +658,7 @@ async def node_compre_qa(state: InterviewState) -> dict:
             "questions_asked": questions_asked,
             "asked_questions": _remember_question(state, followup_q),
             "raw_scores": archive,
+            "turn_tags": turn_tags,
         }
 
     if questions_asked < settings["questions_per_phase"]:
@@ -513,7 +674,7 @@ async def node_compre_qa(state: InterviewState) -> dict:
                 HumanMessage(
                     content=_question_prompt(
                         "再挑一个还没问过的话题，问一个具体场景。不评价考生的性格。",
-                        state,
+                        tagged_state,
                     )
                 ),
             ],
@@ -526,13 +687,15 @@ async def node_compre_qa(state: InterviewState) -> dict:
             "questions_asked": questions_asked + 1,
             "asked_questions": _remember_question(state, next_question),
             "raw_scores": archive,
+            "turn_tags": turn_tags,
         }
 
     # 在同一轮里生成成绩单。若本轮停在 "report" 阶段，前端会再等一句
     # 用户发言，而面试并没有理由再要这句话。
     logger.info("[LangGraph] Compre QA finished, generating final report in this turn")
-    report_result = await _generate_report({**state, "raw_scores": archive})
+    report_result = await _generate_report(tagged_state)
     report_result["raw_scores"] = archive
+    report_result["turn_tags"] = turn_tags
     return report_result
 
 
@@ -563,6 +726,13 @@ def _build_report_payload(data: dict[str, Any]) -> dict[str, Any]:
     total_score = max(0, min(100, total_score))
 
     raw_scores = data.get("scores") if isinstance(data.get("scores"), dict) else {}
+    weak_topics: list[str] = []
+    raw_weak = data.get("weak_topics")
+    if isinstance(raw_weak, list):
+        for item in raw_weak:
+            topic = normalize_topic(str(item))
+            if topic and topic not in weak_topics:
+                weak_topics.append(topic)
     return {
         "total_score": total_score,
         "scores": {
@@ -574,6 +744,7 @@ def _build_report_payload(data: dict[str, Any]) -> dict[str, Any]:
         "improvement_tips": str(data.get("improvement_tips") or DEFAULT_TIPS).strip(),
         "closing": str(data.get("interviewer_closing") or DEFAULT_CLOSING).strip(),
         "exp_logic_note": str(data.get("exp_logic_note") or "").strip(),
+        "weak_topics": weak_topics,
     }
 
 
@@ -630,6 +801,46 @@ def _format_report_text(report: dict[str, Any]) -> str:
     )
 
 
+def _persist_learner_memory(state: InterviewState, report: dict[str, Any]) -> list[str]:
+    """把本场结构化评答写入个人知识库；失败不阻断成绩单。"""
+    learner_id = str(state.get("learner_id") or "").strip()
+    session_id = str(state.get("session_id") or "").strip()
+    if not learner_id or not session_id:
+        return list(report.get("weak_topics") or [])
+
+    turn_records = _parse_turn_tags(state.get("turn_tags"))
+    asked_items: list[tuple[str, str]] = []
+    for item in turn_records:
+        question = str(item.get("question") or "").strip()
+        topic = normalize_topic(str(item.get("topic") or "")) or "se.design"
+        if question:
+            asked_items.append((question, topic))
+
+    derived_weak = _weak_topics_from_turns(turn_records)
+    merged = list(report.get("weak_topics") or [])
+    for topic in derived_weak:
+        if topic not in merged:
+            merged.append(topic)
+    report["weak_topics"] = merged
+
+    try:
+        return get_store().record_session(
+            learner_id=learner_id,
+            session_id=session_id,
+            mode=str(state.get("interview_mode") or config.interview_mode),
+            report=report,
+            turn_records=turn_records,
+            asked_items=asked_items,
+        )
+    except Exception:
+        logger.warning(
+            "[LangGraph] Failed to persist learner memory for %s",
+            learner_id,
+            exc_info=True,
+        )
+        return merged
+
+
 async def _generate_report(state: InterviewState) -> dict:
     logger.info("[LangGraph] Generating final interview report")
     archive = state.get("raw_scores", "")
@@ -650,16 +861,30 @@ async def _generate_report(state: InterviewState) -> dict:
         report = _build_report_payload(json.loads(raw_text))
     except Exception as e:
         logger.warning("[LangGraph] JSON report parsing failed, falling back to text: %s", e)
-        return {
+        fallback = {
             "reply": "面试已结束，非常感谢同学的配合，稍后可在后台查看详细报告。",
             "final_report": f"面试结束。\n{raw_text}",
             "report_data": {},
             "current_phase": "completed",
             "is_answering": False,
         }
+        # 即便成绩单 JSON 失败，仍尽量落库本场标签
+        _persist_learner_memory(
+            state,
+            {
+                "total_score": 0,
+                "core_weakness": DEFAULT_WEAKNESS,
+                "improvement_tips": DEFAULT_TIPS,
+                "weak_topics": _weak_topics_from_turns(_parse_turn_tags(state.get("turn_tags"))),
+            },
+        )
+        return fallback
 
     if enabled:
         report["delivery"] = delivery_report(turns)
+
+    weak_topics = _persist_learner_memory(state, report)
+    report["weak_topics"] = weak_topics
 
     return {
         "reply": f"面试结束。总评得分 {report['total_score']} 分。{report['closing']}",

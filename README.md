@@ -42,11 +42,12 @@
   | `mode` | `{"mode": "quick"\|"real"}` | 当前面试模式徽章 |
 
 - **每场面试独立存档**：`/api/token` 为每个 token 生成一次性 `session_id`，写入 LiveKit metadata；Agent 用它作为 LangGraph 的 `thread_id`。同一考生重进考场不会继承上一场的状态。
+- **长期记忆 / 个人知识库**：浏览器用 `localStorage` 持久化本机 `learner_id`（作为 LiveKit identity）。场次结束后把结构化知识点标签、掌握度与成绩单写入 SQLite（默认 `data/learner_kb.sqlite3`）；下一场出题会注入历史薄弱点与跨场已问摘要。大厅可查看建议加强方向，并支持「针对薄弱点开练」（`/api/token?focus=os.memory,...`）。`kb_facts` 表已预留给未来的习惯/偏好个性化。
 - **真流式回复**：图节点通过 LangGraph `custom` stream 逐 token 推送，TTS 首字延迟显著低于"整段生成后再切块"。
 - 关闭 `preemptive_generation`，避免推测执行导致一轮作答被重复消费（面试状态机有副作用，正确性优先）。
 - 出题时会带上"已经问过的问题"，降低 real 模式中重复出题的概率。
 - 服务端加固：`ThreadingHTTPServer`、路径穿越防护（unquote + realpath + commonpath）、移除通配 CORS（可选 `ALLOWED_ORIGIN` 白名单）、安全响应头、`Content-Length`/MIME/缓存策略、`GET /api/health`、token 默认 1 小时 TTL、UTF-8 安全的日志（中文 Windows 控制台不再因 emoji 崩溃）、端口占用友好报错与优雅退出。
-- 测试：148 个测试（状态机节点、真实图多轮流转、两种模式题量、LangGraph↔LiveKit 适配器事件与流式、Agent 装配与模式解析、HTTP 服务端、配置预检、模式常量一致性），全部离线可跑。
+- 测试：162 个测试（状态机节点、真实图多轮流转、两种模式题量、LangGraph↔LiveKit 适配器事件与流式、Agent 装配与模式解析、HTTP 服务端、考生知识库、配置预检、模式常量一致性），全部离线可跑。
 
 ---
 
@@ -96,6 +97,10 @@ INTERVIEW_MODE=quick
 QUICK_QUESTIONS_PER_PHASE=1
 REAL_QUESTIONS_PER_PHASE=3
 TOKEN_TTL_SECONDS=3600
+
+# 长期记忆（可选）
+# LEARNER_DB_PATH=data/learner_kb.sqlite3
+# MASTERY_HALF_LIFE_DAYS=30
 
 # 开场白（直接说出的台词，不是给模型的指令）
 # GREETING_TEXT=同学你好，欢迎参加考研复试模拟面试，请先进行1分钟左右的自我介绍。
@@ -154,8 +159,9 @@ python agent.py connect --room ai-room
 ├── config.py                 # 集中化配置（零硬编码）
 ├── interview_modes.py        # quick/real 的唯一事实来源（零第三方依赖）
 ├── interview_graph.py        # LangGraph 复试状态图、提示词、模式策略、成绩单
+├── learner_store.py          # 考生长期记忆 / 个人知识库（SQLite）
 ├── langgraph_adapter.py      # LangGraph ↔ LiveKit LLM 适配器（流式 + UI 事件）
-├── server.py                 # 静态前端服务 + token 签发 + /api/health
+├── server.py                 # 静态前端服务 + token 签发 + /api/health + 画像 API
 ├── scripts/
 │   ├── demo-preflight.ps1    # Windows 演示预检
 │   └── start-demo.ps1        # Windows 三窗口一键启动

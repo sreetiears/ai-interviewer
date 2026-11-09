@@ -7,7 +7,9 @@ import pytest
 
 from agent import (
     _build_session,
+    _resolve_focus_topics,
     _resolve_interview_mode,
+    _resolve_learner_id,
     _resolve_session_id,
     entrypoint,
 )
@@ -22,12 +24,24 @@ async def test_build_session_wires_langgraph_adapter_with_event_sink(monkeypatch
 
     monkeypatch.setattr("agent.silero.VAD.load", lambda **kwargs: object())
 
-    agent_instance, session = _build_session("candidate-1", on_event=sink, interview_mode="real")
+    agent_instance, session = _build_session(
+        "candidate-1",
+        on_event=sink,
+        interview_mode="real",
+        learner_id="learner-aaaabbbbcccc",
+        focus_topics=["os.memory"],
+        profile_snapshot="加强：操作系统·内存",
+        session_id="sess-1",
+    )
 
     assert isinstance(session.llm, LangGraphLLM)
     assert session.llm.thread_id == "candidate-1"
     assert session.llm._on_event is sink
     assert session.llm.interview_mode == "real"
+    assert session.llm.learner_id == "learner-aaaabbbbcccc"
+    assert session.llm.focus_topics == ["os.memory"]
+    assert session.llm.profile_snapshot == "加强：操作系统·内存"
+    assert session.llm.session_id == "sess-1"
     assert agent_instance is not None
 
 
@@ -93,14 +107,24 @@ async def test_entrypoint_publishes_mode_and_initial_phase(monkeypatch):
     session = _FakeSession()
     captured: dict = {}
 
-    def fake_build_session(identity, on_event=None, interview_mode=None, thread_id=None):
+    def fake_build_session(identity, on_event=None, interview_mode=None, thread_id=None, **kwargs):
         captured["identity"] = identity
         captured["on_event"] = on_event
         captured["interview_mode"] = interview_mode
         captured["thread_id"] = thread_id
+        captured["kwargs"] = kwargs
         return SimpleNamespace(), session
 
     monkeypatch.setattr("agent._build_session", fake_build_session)
+    monkeypatch.setattr(
+        "agent.get_store",
+        lambda: SimpleNamespace(
+            build_snapshot=lambda learner_id, focus_topics=None: SimpleNamespace(
+                focus_topics=list(focus_topics or []),
+                prompt_text=lambda: "历史薄弱点：操作系统·内存",
+            )
+        ),
+    )
 
     await entrypoint(ctx)
 
@@ -108,6 +132,8 @@ async def test_entrypoint_publishes_mode_and_initial_phase(monkeypatch):
     assert captured["on_event"] is not None
     assert captured["interview_mode"] == "real"
     assert captured["thread_id"] == "session-1"
+    assert captured["kwargs"]["learner_id"] == "candidate-1"
+    assert captured["kwargs"]["profile_snapshot"] == "历史薄弱点：操作系统·内存"
     published = ctx.room.local_participant.published
     assert published[0]["payload"] == {"type": "mode", "mode": "real"}
     assert published[1]["payload"] == {"type": "phase", "phase": "self_intro"}
@@ -125,11 +151,20 @@ async def test_entrypoint_falls_back_to_room_and_identity_for_old_tokens(monkeyp
     session = _FakeSession()
     captured: dict = {}
 
-    def fake_build_session(identity, on_event=None, interview_mode=None, thread_id=None):
+    def fake_build_session(identity, on_event=None, interview_mode=None, thread_id=None, **kwargs):
         captured["thread_id"] = thread_id
         return SimpleNamespace(), session
 
     monkeypatch.setattr("agent._build_session", fake_build_session)
+    monkeypatch.setattr(
+        "agent.get_store",
+        lambda: SimpleNamespace(
+            build_snapshot=lambda learner_id, focus_topics=None: SimpleNamespace(
+                focus_topics=[],
+                prompt_text=lambda: "",
+            )
+        ),
+    )
 
     await entrypoint(ctx)
 
@@ -150,6 +185,20 @@ def test_resolve_interview_mode_from_participant_metadata():
     assert _resolve_interview_mode(SimpleNamespace(metadata="not json")) == config.interview_mode
     assert _resolve_interview_mode(SimpleNamespace(metadata='{"interview_mode": "bogus"}')) == "quick"
     assert _resolve_interview_mode(SimpleNamespace()) == config.interview_mode
+
+
+def test_resolve_learner_and_focus_from_metadata():
+    participant = SimpleNamespace(
+        metadata=json.dumps(
+            {
+                "learner_id": "learner-aaaabbbbcccc",
+                "focus_topics": ["os.memory", "cn.tcp"],
+            }
+        )
+    )
+    assert _resolve_learner_id(participant, "fallback") == "learner-aaaabbbbcccc"
+    assert _resolve_focus_topics(participant) == ["os.memory", "cn.tcp"]
+    assert _resolve_learner_id(SimpleNamespace(metadata="{}"), "candidate-9") == "candidate-9"
 
 
 def test_agent_has_no_dify_backend():

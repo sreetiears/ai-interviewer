@@ -14,3 +14,5 @@ __pycache__/
 .DS_Store
 Thumbs.db
 .claude/skills/
+data/*.sqlite3
+data/*.sqlite3-*
