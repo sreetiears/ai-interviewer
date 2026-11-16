@@ -506,14 +506,20 @@ def test_security_headers_present(http_port):
 def test_non_get_methods_return_405(http_port, method):
     status, headers, body = http_request(http_port, method, "/")
     assert status == 405, method
-    assert headers["allow"] == "GET"
+    # POST 已用于 /api/rag/match；对未支持路径的 POST 仍 405，Allow 仅声明 GET。
+    # 其它未实现动词由 __getattr__ 兜底，Allow 含 GET/POST。
+    if method == "POST":
+        assert headers["allow"] == "GET"
+    else:
+        assert "GET" in headers["allow"]
+        assert "POST" in headers["allow"]
     assert int(headers["content-length"]) == len(body)
 
 
 def test_head_is_not_served(http_port):
     status, headers, body = http_request(http_port, "HEAD", "/")
     assert status == 405
-    assert headers["allow"] == "GET"
+    assert "GET" in headers["allow"]
     assert body == b""  # HEAD 响应不带正文
 
 

@@ -16,3 +16,4 @@ Thumbs.db
 .claude/skills/
 data/*.sqlite3
 data/*.sqlite3-*
+data/rag_chroma/

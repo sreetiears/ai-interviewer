@@ -107,6 +107,22 @@ class InterviewConfig:
     learner_db_path: str = _env("LEARNER_DB_PATH", "data/learner_kb.sqlite3")
     mastery_half_life_days: float = _env_float("MASTERY_HALF_LIFE_DAYS", 30.0)
 
+    # 双文档 RAG：薄弱点档案（查询）× 专业课讲义（语料 / Chroma）
+    rag_persist_path: str = _env("RAG_PERSIST_PATH", "data/rag_chroma")
+    rag_knowledge_dir: str = _env("RAG_KNOWLEDGE_DIR", "knowledge")
+    rag_top_k: int = _env_int("RAG_TOP_K", 3)
+    embedding_model: str = _env("EMBEDDING_MODEL", "BAAI/bge-m3")
+    embedding_base_url: str = _env(
+        "EMBEDDING_BASE_URL",
+        _env("LLM_BASE_URL", _env("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")),
+    )
+
+
+def rag_enabled() -> bool:
+    """专业课出题是否注入知识库检索；默认打开，``RAG_ENABLED=0`` 关闭。"""
+    raw = os.getenv("RAG_ENABLED", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
 
 def listen_bakeoff_dirs() -> tuple[str, str]:
     """离线横评的录音目录和记录目录。都由本机配置给出，不指向仓库内。"""

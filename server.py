@@ -1,7 +1,8 @@
 """自定义面试前端的 HTTP 服务。
 
 从 ``frontend/`` 提供静态前端，并为浏览器签发 LiveKit 访问令牌
-（``GET /api/token``）。同时暴露 ``GET /api/health`` 供存活探测。
+（``GET /api/token``）。同时暴露 ``GET /api/health`` 与
+``POST /api/rag/match``（双文档匹配演示）。
 
 运行方式::
 
@@ -85,6 +86,7 @@ IDENTIFIER_RE = re.compile(
 )
 MAX_QUERY_LENGTH = 2048
 MAX_QUERY_FIELDS = 20
+MAX_JSON_BODY_BYTES = 32_768
 
 # --- 静态文件 ----------------------------------------------------------------
 MAX_PATH_LENGTH = 2048
@@ -363,8 +365,17 @@ class InterviewHttpHandler(BaseHTTPRequestHandler):
             logger.exception("Unhandled error while serving %s", self.path)
             self._respond_status(HTTPStatus.INTERNAL_SERVER_ERROR)
 
+    def do_POST(self):
+        try:
+            self._handle_post()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+        except Exception:
+            logger.exception("Unhandled error while serving POST %s", self.path)
+            self._respond_status(HTTPStatus.INTERNAL_SERVER_ERROR)
+
     def __getattr__(self, name):
-        # GET 以外的方法（POST/PUT/DELETE/OPTIONS/...）一律返回 405。
+        # 未显式实现的方法（PUT/DELETE/OPTIONS/...）一律返回 405。
         if name.startswith("do_"):
             return self._method_not_allowed
         raise AttributeError(name)
@@ -376,7 +387,7 @@ class InterviewHttpHandler(BaseHTTPRequestHandler):
             HTTPStatus.METHOD_NOT_ALLOWED,
             "405 Method Not Allowed",
             cache_control="no-store",
-            extra_headers={"Allow": "GET"},
+            extra_headers={"Allow": "GET, POST"},
         )
 
     def _handle_get(self) -> None:
@@ -399,10 +410,126 @@ class InterviewHttpHandler(BaseHTTPRequestHandler):
             self._handle_learner_profile(parsed)
         elif path == "/api/learners/me/sessions":
             self._handle_learner_sessions(parsed)
+        elif path == "/api/rag/match":
+            self._respond(
+                HTTPStatus.METHOD_NOT_ALLOWED,
+                "405 Method Not Allowed",
+                cache_control="no-store",
+                extra_headers={"Allow": "POST"},
+            )
         else:
             self._handle_static(path)
 
+    def _handle_post(self) -> None:
+        try:
+            parsed = urlparse(self.path)
+        except ValueError:
+            self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "invalid request target"})
+            return
+        path = parsed.path or "/"
+        if path == "/api/rag/match":
+            self._handle_rag_match()
+            return
+        self.close_connection = True
+        self._respond(
+            HTTPStatus.METHOD_NOT_ALLOWED,
+            "405 Method Not Allowed",
+            cache_control="no-store",
+            extra_headers={"Allow": "GET"},
+        )
+
+    def _read_json_body(self) -> dict | None:
+        """读取有限长度的 JSON 对象；失败时已写响应并返回 ``None``。"""
+        raw_len = self.headers.get("Content-Length")
+        if raw_len is None:
+            self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "missing Content-Length"})
+            return None
+        try:
+            length = int(raw_len)
+        except (TypeError, ValueError):
+            self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "invalid Content-Length"})
+            return None
+        if length < 0 or length > MAX_JSON_BODY_BYTES:
+            self.close_connection = True
+            self._respond_json(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                {"error": "body too large", "limit": MAX_JSON_BODY_BYTES},
+            )
+            return None
+        try:
+            raw = self.rfile.read(length) if length else b""
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+            return None
+        if not raw:
+            self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "empty body"})
+            return None
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "invalid JSON"})
+            return None
+        if not isinstance(payload, dict):
+            self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "JSON body must be an object"})
+            return None
+        return payload
+
     # -- 接口 -----------------------------------------------------------------
+    def _handle_rag_match(self) -> None:
+        """``POST /api/rag/match``：用 query（文档 A）匹配知识库（文档 B）。"""
+        from config import rag_enabled
+        from rag.retrieve import match_documents
+
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        if not rag_enabled():
+            self._respond_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"error": "rag disabled", "detail": "Set RAG_ENABLED=1 to enable matching."},
+            )
+            return
+        query = str(payload.get("query") or "").strip()
+        if not query:
+            self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "query is required"})
+            return
+        if len(query) > 8000:
+            self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "query too long", "limit": 8000})
+            return
+        topics_raw = payload.get("topics")
+        if topics_raw is None:
+            topics = []
+        elif isinstance(topics_raw, str):
+            topics = parse_focus_topics(topics_raw)
+        elif isinstance(topics_raw, list):
+            topics = parse_focus_topics(",".join(str(t) for t in topics_raw))
+        else:
+            self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "topics must be string or array"})
+            return
+        top_k = payload.get("top_k")
+        try:
+            k = int(top_k) if top_k is not None else None
+        except (TypeError, ValueError):
+            self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "top_k must be an integer"})
+            return
+        if k is not None and (k < 1 or k > 20):
+            self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "top_k out of range", "limit": [1, 20]})
+            return
+        try:
+            matches = match_documents(query, topics=topics, top_k=k)
+        except Exception:
+            logger.exception("RAG match failed")
+            self._respond_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "rag match failed"})
+            return
+        self._respond_json(
+            HTTPStatus.OK,
+            {
+                "query": query,
+                "topics": topics,
+                "matches": matches,
+            },
+        )
+
     def _handle_health(self) -> None:
         self._respond_json(
             HTTPStatus.OK,

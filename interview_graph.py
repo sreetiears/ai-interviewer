@@ -197,8 +197,17 @@ def _get_llm(temperature: float = 0.5) -> ChatOpenAI:
     )
 
 
-def _question_prompt(base: str, state: InterviewState) -> str:
-    """把已经问过的问题、跨场画像与加强方向追加到出题提示词后面。"""
+def _question_prompt(
+    base: str,
+    state: InterviewState,
+    *,
+    include_rag: bool = False,
+) -> str:
+    """把已经问过的问题、跨场画像与加强方向追加到出题提示词后面。
+
+    ``include_rag=True`` 时（仅专业课出题）再按薄弱点检索知识库段落；
+    检索失败或关闭 RAG 时静默降级，不阻断面试。
+    """
     parts = [base]
     asked = str(state.get("asked_questions", "") or "").strip()
     if asked:
@@ -210,6 +219,18 @@ def _question_prompt(base: str, state: InterviewState) -> str:
     if focus:
         labels = [TOPIC_LABELS.get(t, t) for t in focus]
         parts.append("本场必须优先加强：" + "、".join(labels))
+    if include_rag:
+        try:
+            from rag.retrieve import rag_context_for_prompt
+
+            rag_block = rag_context_for_prompt(
+                state.get("focus_topics"),
+                state.get("profile_snapshot"),
+            )
+            if rag_block:
+                parts.append(rag_block)
+        except Exception:
+            logger.warning("RAG context injection failed; continuing without passages", exc_info=True)
     return "\n\n".join(parts)
 
 
@@ -474,7 +495,7 @@ async def node_pro_qa(state: InterviewState) -> dict:
             llm,
             [
                 SystemMessage(content=PRO_QUESTION_SYSTEM),
-                HumanMessage(content=_question_prompt(prompt, state)),
+                HumanMessage(content=_question_prompt(prompt, state, include_rag=True)),
             ],
         )
         return {
@@ -544,6 +565,7 @@ async def node_pro_qa(state: InterviewState) -> dict:
                     content=_question_prompt(
                         "请再出一道题，不要重复已经问过的。仍只问一个机制、取舍或故障。",
                         tagged_state,
+                        include_rag=True,
                     )
                 ),
             ],

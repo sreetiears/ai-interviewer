@@ -43,11 +43,12 @@
 
 - **每场面试独立存档**：`/api/token` 为每个 token 生成一次性 `session_id`，写入 LiveKit metadata；Agent 用它作为 LangGraph 的 `thread_id`。同一考生重进考场不会继承上一场的状态。
 - **长期记忆 / 个人知识库**：浏览器用 `localStorage` 持久化本机 `learner_id`（作为 LiveKit identity）。场次结束后把结构化知识点标签、掌握度与成绩单写入 SQLite（默认 `data/learner_kb.sqlite3`）；下一场出题会注入历史薄弱点与跨场已问摘要。大厅可查看建议加强方向，并支持「针对薄弱点开练」（`/api/token?focus=os.memory,...`）。`kb_facts` 表已预留给未来的习惯/偏好个性化。
+- **双文档 RAG（薄弱点 × 专业课讲义）**：预置 `knowledge/` Markdown 语料入库 **Chroma**；用考生加强方向 / 档案摘要作为查询侧，向量检索 + topic 元数据过滤，命中段落注入专业课出题提示。可用 `POST /api/rag/match` 单独演示匹配；`RAG_ENABLED=0` 或索引缺失时自动降级，不阻断面试。
 - **真流式回复**：图节点通过 LangGraph `custom` stream 逐 token 推送，TTS 首字延迟显著低于"整段生成后再切块"。
 - 关闭 `preemptive_generation`，避免推测执行导致一轮作答被重复消费（面试状态机有副作用，正确性优先）。
 - 出题时会带上"已经问过的问题"，降低 real 模式中重复出题的概率。
 - 服务端加固：`ThreadingHTTPServer`、路径穿越防护（unquote + realpath + commonpath）、移除通配 CORS（可选 `ALLOWED_ORIGIN` 白名单）、安全响应头、`Content-Length`/MIME/缓存策略、`GET /api/health`、token 默认 1 小时 TTL、UTF-8 安全的日志（中文 Windows 控制台不再因 emoji 崩溃）、端口占用友好报错与优雅退出。
-- 测试：162 个测试（状态机节点、真实图多轮流转、两种模式题量、LangGraph↔LiveKit 适配器事件与流式、Agent 装配与模式解析、HTTP 服务端、考生知识库、配置预检、模式常量一致性），全部离线可跑。
+- 测试：状态机节点、真实图多轮流转、两种模式题量、LangGraph↔LiveKit 适配器事件与流式、Agent 装配与模式解析、HTTP 服务端、考生知识库、RAG 检索与 match API、配置预检、模式常量一致性，全部离线可跑。
 
 ---
 
@@ -63,6 +64,22 @@ python -m venv .venv
 # source .venv/bin/activate
 
 pip install -r requirements.txt
+```
+
+### 1b. 构建 RAG 知识库索引（专业课出题用）
+
+```bash
+# 有 SiliconFlow / 兼容 embedding Key 时：
+python scripts/build_rag_index.py
+
+# 无 Key、仅本地演示 / 跑测：
+python scripts/build_rag_index.py --fake
+```
+
+索引默认写到 `data/rag_chroma`。也可用 `POST /api/rag/match` 验证「查询文本 → 讲义片段」匹配：
+
+```bash
+curl -s http://127.0.0.1:8080/api/rag/match -H "Content-Type: application/json" -d "{\"query\":\"虚拟内存与缺页\",\"topics\":[\"os.memory\"],\"top_k\":2}"
 ```
 
 ### 2. 配置环境变量
@@ -160,9 +177,12 @@ python agent.py connect --room ai-room
 ├── interview_modes.py        # quick/real 的唯一事实来源（零第三方依赖）
 ├── interview_graph.py        # LangGraph 复试状态图、提示词、模式策略、成绩单
 ├── learner_store.py          # 考生长期记忆 / 个人知识库（SQLite）
+├── rag/                      # 双文档 RAG：切分 / embedding / Chroma / 检索
+├── knowledge/                # 专业课讲义 Markdown（按 PRO_TOPICS 命名）
 ├── langgraph_adapter.py      # LangGraph ↔ LiveKit LLM 适配器（流式 + UI 事件）
-├── server.py                 # 静态前端服务 + token 签发 + /api/health + 画像 API
+├── server.py                 # 静态前端 + token + health + 画像 + RAG match API
 ├── scripts/
+│   ├── build_rag_index.py    # 讲义入库 Chroma
 │   ├── demo-preflight.ps1    # Windows 演示预检
 │   └── start-demo.ps1        # Windows 三窗口一键启动
 ├── frontend/
@@ -176,7 +196,8 @@ python agent.py connect --room ai-room
 │   ├── test_langgraph_adapter.py  # 适配器事件契约与 token 流
 │   ├── test_agent_stream.py       # Agent 装配、metadata 模式/会话解析
 │   ├── test_interview_modes.py    # 模式常量唯一来源
-│   └── test_server.py             # HTTP 服务端（65 项：路由/安全/缓存/模式）
+│   ├── test_rag.py                # RAG 切分/检索/出题注入/match API
+│   └── test_server.py             # HTTP 服务端（路由/安全/缓存/模式）
 ├── scripts/                  # Linux/WSL 辅助脚本（安装 LiveKit、重建 venv、导入检查）
 │   ├── install_livekit_tools.sh
 │   ├── rebuild_venv.sh
