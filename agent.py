@@ -18,7 +18,13 @@ from livekit.plugins.openai import tts as openai_tts_impl
 
 # 加载环境配置
 load_dotenv()
-from config import assert_runtime_ready, config, delivery_metrics_enabled, resolve_api_key
+from config import (
+    assert_runtime_ready,
+    config,
+    delivery_metrics_enabled,
+    rag_enabled,
+    resolve_api_key,
+)
 from interview_modes import normalize_mode as normalize_interview_mode
 from langgraph_adapter import LangGraphLLM
 from learner_store import get_store, parse_focus_topics
@@ -257,6 +263,26 @@ def _maybe_tap_vad(inner, tap: _SpeechTap):
     return _TapVAD(inner, tap)
 
 
+async def _prefetch_rag_context(
+    focus_topics: list[str] | None,
+    profile_snapshot: str | None,
+) -> str:
+    """开场预取知识库段落；失败返回空串，不阻断面试。"""
+    if not rag_enabled():
+        return ""
+    try:
+        from rag.retrieve import rag_context_for_prompt
+
+        return await asyncio.to_thread(
+            rag_context_for_prompt,
+            focus_topics,
+            profile_snapshot,
+        )
+    except Exception:
+        logger.warning("RAG prefetch failed; continuing without passages", exc_info=True)
+        return ""
+
+
 def _build_session(
     participant_identity: str,
     on_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
@@ -266,6 +292,7 @@ def _build_session(
     focus_topics: list[str] | None = None,
     profile_snapshot: str | None = None,
     session_id: str | None = None,
+    rag_context: str | None = None,
 ) -> tuple[voice.Agent, voice.AgentSession]:
     user_id = _safe_identity(participant_identity)
     resolved_mode = normalize_interview_mode(interview_mode or config.interview_mode)
@@ -285,6 +312,7 @@ def _build_session(
         focus_topics=focus_topics or [],
         profile_snapshot=profile_snapshot or "",
         session_id=session_id or resolved_thread,
+        rag_context=rag_context or "",
     )
     tap = _SpeechTap()
     agent_instance = InterviewAgent(
@@ -345,13 +373,15 @@ async def entrypoint(ctx: JobContext) -> None:
         profile_snapshot = snapshot.prompt_text()
     except Exception:
         logger.warning("Failed to load learner snapshot for %s", learner_id, exc_info=True)
+    rag_context = await _prefetch_rag_context(focus_topics, profile_snapshot)
     logger.info(
-        "Participant joined: %s (interview mode: %s, thread: %s, learner: %s, focus: %s)",
+        "Participant joined: %s (interview mode: %s, thread: %s, learner: %s, focus: %s, rag=%s)",
         participant_identity,
         interview_mode,
         thread_id,
         learner_id,
         focus_topics,
+        "yes" if rag_context else "no",
     )
 
     async def publish_event(event: dict[str, Any]) -> None:
@@ -375,6 +405,7 @@ async def entrypoint(ctx: JobContext) -> None:
         focus_topics=focus_topics,
         profile_snapshot=profile_snapshot,
         session_id=session_id or thread_id,
+        rag_context=rag_context,
     )
 
     logger.info("Starting voice session")

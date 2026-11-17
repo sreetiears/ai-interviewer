@@ -7,6 +7,7 @@ import pytest
 
 from agent import (
     _build_session,
+    _prefetch_rag_context,
     _resolve_focus_topics,
     _resolve_interview_mode,
     _resolve_learner_id,
@@ -15,6 +16,23 @@ from agent import (
 )
 from config import config
 from langgraph_adapter import LangGraphLLM
+
+
+@pytest.mark.asyncio
+async def test_prefetch_rag_context_disabled_returns_empty(monkeypatch):
+    monkeypatch.setenv("RAG_ENABLED", "0")
+    assert await _prefetch_rag_context(["os.memory"], "薄弱点") == ""
+
+
+@pytest.mark.asyncio
+async def test_prefetch_rag_context_failure_returns_empty(monkeypatch):
+    monkeypatch.setenv("RAG_ENABLED", "1")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("embed down")
+
+    monkeypatch.setattr("rag.retrieve.rag_context_for_prompt", boom)
+    assert await _prefetch_rag_context(["os.memory"], "薄弱点") == ""
 
 
 @pytest.mark.asyncio
@@ -32,6 +50,7 @@ async def test_build_session_wires_langgraph_adapter_with_event_sink(monkeypatch
         focus_topics=["os.memory"],
         profile_snapshot="加强：操作系统·内存",
         session_id="sess-1",
+        rag_context="知识库参考（据此出题，勿照抄原文）：\n[1] (操作系统·内存) 虚拟内存",
     )
 
     assert isinstance(session.llm, LangGraphLLM)
@@ -42,6 +61,7 @@ async def test_build_session_wires_langgraph_adapter_with_event_sink(monkeypatch
     assert session.llm.focus_topics == ["os.memory"]
     assert session.llm.profile_snapshot == "加强：操作系统·内存"
     assert session.llm.session_id == "sess-1"
+    assert "知识库参考" in session.llm.rag_context
     assert agent_instance is not None
 
 
@@ -115,7 +135,12 @@ async def test_entrypoint_publishes_mode_and_initial_phase(monkeypatch):
         captured["kwargs"] = kwargs
         return SimpleNamespace(), session
 
+    async def fake_prefetch(focus_topics, profile_snapshot):
+        captured["prefetch"] = (list(focus_topics or []), profile_snapshot)
+        return "知识库参考（据此出题，勿照抄原文）：\n[1] 预取段落"
+
     monkeypatch.setattr("agent._build_session", fake_build_session)
+    monkeypatch.setattr("agent._prefetch_rag_context", fake_prefetch)
     monkeypatch.setattr(
         "agent.get_store",
         lambda: SimpleNamespace(
@@ -134,6 +159,8 @@ async def test_entrypoint_publishes_mode_and_initial_phase(monkeypatch):
     assert captured["thread_id"] == "session-1"
     assert captured["kwargs"]["learner_id"] == "candidate-1"
     assert captured["kwargs"]["profile_snapshot"] == "历史薄弱点：操作系统·内存"
+    assert "预取段落" in captured["kwargs"]["rag_context"]
+    assert captured["prefetch"][1] == "历史薄弱点：操作系统·内存"
     published = ctx.room.local_participant.published
     assert published[0]["payload"] == {"type": "mode", "mode": "real"}
     assert published[1]["payload"] == {"type": "phase", "phase": "self_intro"}
@@ -155,7 +182,11 @@ async def test_entrypoint_falls_back_to_room_and_identity_for_old_tokens(monkeyp
         captured["thread_id"] = thread_id
         return SimpleNamespace(), session
 
+    async def fake_prefetch(focus_topics, profile_snapshot):
+        return ""
+
     monkeypatch.setattr("agent._build_session", fake_build_session)
+    monkeypatch.setattr("agent._prefetch_rag_context", fake_prefetch)
     monkeypatch.setattr(
         "agent.get_store",
         lambda: SimpleNamespace(

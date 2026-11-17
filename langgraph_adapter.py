@@ -71,6 +71,7 @@ class LangGraphLLM(llm.LLM):
         focus_topics: list[str] | None = None,
         profile_snapshot: str | None = None,
         session_id: str | None = None,
+        rag_context: str | None = None,
     ) -> None:
         super().__init__()
         self.thread_id = thread_id or str(uuid.uuid4())
@@ -83,6 +84,7 @@ class LangGraphLLM(llm.LLM):
         self.focus_topics = [str(t).strip() for t in (focus_topics or []) if str(t).strip()]
         self.profile_snapshot = str(profile_snapshot or "").strip()
         self.session_id = (session_id or self.thread_id).strip()
+        self.rag_context = str(rag_context or "").strip()
         # 图会在轮次之间把状态写入检查点，因此 ``report_data`` 和
         # ``current_phase`` 会留到后续轮次。记住界面已经收到过什么，
         # 否则面试结束后考生再说一句话，结束成绩单就会再弹一次。
@@ -207,6 +209,7 @@ class LangGraphLLMStream(llm.LLMStream):
                     "session_id": graph_llm.session_id,
                     "focus_topics": ",".join(graph_llm.focus_topics),
                     "profile_snapshot": graph_llm.profile_snapshot,
+                    "rag_context": graph_llm.rag_context,
                 }
                 if delivery_metrics_enabled():
                     input_state["delivery_turns"] = [

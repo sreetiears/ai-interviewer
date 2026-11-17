@@ -85,8 +85,8 @@ _Avoid_: 能力分, 智商, 永久等级
 _Avoid_: 向量库, RAG 语料, 会话记忆, Chroma
 
 **RAG 知识库**:
-预置在 `knowledge/` 的专业课讲义，经切分与 embedding 写入 Chroma。查询侧来自加强方向与考生档案摘要；命中段落只注入专业课出题，失败或关闭时降级。
-_Avoid_: 个人知识库, SQLite 档案, 会话记忆
+预置在 `knowledge/` 的专业课讲义，经切分与 embedding 写入 Chroma。查询侧来自加强方向与考生档案摘要；命中段落只注入专业课出题，失败或关闭时降级。Query embedding 在会话开场预取一次并写入 `rag_context`，出题热路径只读缓存，不在考生作答后同步 embed。
+_Avoid_: 个人知识库, SQLite 档案, 会话记忆, 每轮 ASR 后 embed
 
 **双文档匹配**:
 用文档 A（薄弱点/档案文本）去检索文档 B（讲义语料）的相关段落。可用面试出题链路或 `POST /api/rag/match` 演示。

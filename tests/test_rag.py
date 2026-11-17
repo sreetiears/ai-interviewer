@@ -79,31 +79,40 @@ def test_match_documents_returns_scores(rag_index):
     assert matches[0]["text"]
 
 
-def test_question_prompt_injects_rag(rag_index, monkeypatch):
+def test_question_prompt_injects_cached_rag_context(rag_index, monkeypatch):
+    """出题热路径只读 state.rag_context，不触发 get_index / embed。"""
     monkeypatch.setenv("RAG_ENABLED", "1")
-    reset_index_singleton()
-    # 让 get_index 用测试索引：直接把 context 函数钉到本 index。
-    monkeypatch.setattr(
-        "rag.retrieve.get_index",
-        lambda **kwargs: rag_index,
+    called = {"get_index": 0}
+
+    def boom(**kwargs):
+        called["get_index"] += 1
+        raise AssertionError("hot path must not call get_index")
+
+    monkeypatch.setattr("rag.retrieve.get_index", boom)
+    cached = rag_context_for_prompt(
+        ["os.memory"],
+        "历史薄弱点：操作系统·内存",
+        index=rag_index,
     )
+    assert "知识库参考" in cached
     state = {
         "asked_questions": "",
         "focus_topics": "os.memory",
         "profile_snapshot": "历史薄弱点：操作系统·内存",
+        "rag_context": cached,
     }
     prompt = _question_prompt("请出一道题", state, include_rag=True)
     assert "知识库参考" in prompt
     assert "操作系统" in prompt or "内存" in prompt or "分页" in prompt
+    assert called["get_index"] == 0
 
 
-def test_question_prompt_skips_rag_when_disabled(rag_index, monkeypatch):
-    monkeypatch.setenv("RAG_ENABLED", "0")
-    monkeypatch.setattr("rag.retrieve.get_index", lambda **kwargs: rag_index)
+def test_question_prompt_skips_rag_when_cache_empty():
     state = {
         "asked_questions": "",
         "focus_topics": "os.memory",
         "profile_snapshot": "历史薄弱点：操作系统·内存",
+        "rag_context": "",
     }
     prompt = _question_prompt("请出一道题", state, include_rag=True)
     assert "知识库参考" not in prompt

@@ -58,6 +58,8 @@ class InterviewState(TypedDict):
     session_id: str
     focus_topics: str
     profile_snapshot: str
+    # 开场预取的知识库段落（已格式化）；出题热路径只读缓存，不再同步 embed。
+    rag_context: str
     # 本场结构化评答记录（每行一条 JSON），终局写回知识库。
     turn_tags: str
 
@@ -205,8 +207,8 @@ def _question_prompt(
 ) -> str:
     """把已经问过的问题、跨场画像与加强方向追加到出题提示词后面。
 
-    ``include_rag=True`` 时（仅专业课出题）再按薄弱点检索知识库段落；
-    检索失败或关闭 RAG 时静默降级，不阻断面试。
+    ``include_rag=True`` 时（仅专业课出题）追加开场预取的 ``rag_context``；
+    无缓存或为空时静默跳过，不在热路径做 embed/检索。
     """
     parts = [base]
     asked = str(state.get("asked_questions", "") or "").strip()
@@ -220,17 +222,9 @@ def _question_prompt(
         labels = [TOPIC_LABELS.get(t, t) for t in focus]
         parts.append("本场必须优先加强：" + "、".join(labels))
     if include_rag:
-        try:
-            from rag.retrieve import rag_context_for_prompt
-
-            rag_block = rag_context_for_prompt(
-                state.get("focus_topics"),
-                state.get("profile_snapshot"),
-            )
-            if rag_block:
-                parts.append(rag_block)
-        except Exception:
-            logger.warning("RAG context injection failed; continuing without passages", exc_info=True)
+        rag_block = str(state.get("rag_context", "") or "").strip()
+        if rag_block:
+            parts.append(rag_block)
     return "\n\n".join(parts)
 
 

@@ -116,6 +116,19 @@ async def test_interview_mode_is_forwarded_to_graph():
 
 
 @pytest.mark.asyncio
+async def test_rag_context_is_forwarded_to_graph():
+    adapter = LangGraphLLM(
+        thread_id="t-rag",
+        rag_context="知识库参考（据此出题，勿照抄原文）：\n[1] 预取",
+    )
+    adapter.graph = FakeGraph({"reply": "请继续。", "current_phase": "pro_qa"})
+
+    await _read_reply(adapter.chat(chat_ctx=_user_chat_ctx("好的")))
+
+    assert adapter.graph.calls[0]["input"]["rag_context"].startswith("知识库参考")
+
+
+@pytest.mark.asyncio
 async def test_unknown_interview_mode_falls_back_to_default():
     adapter = LangGraphLLM(thread_id="t-mode-bad", interview_mode="not-a-mode")
     adapter.graph = FakeGraph({"reply": "请继续。", "current_phase": "pro_qa"})
