@@ -429,8 +429,10 @@ if __name__ == "__main__":
         logger.error("%s", exc)
         sys.exit(1)
     if len(sys.argv) > 1 and sys.argv[1] == "dev":
-        logger.warning(
-            "You started the agent with `dev`. This only registers a worker and waits for a job assignment. "
-            "For local room testing, use `python agent.py connect --room ai-room` so the interviewer joins the room immediately."
+        logger.info(
+            "You started the agent with `dev`. The worker will automatically join new rooms "
+            "issued by the token server (`ai-{session_id}` by default). "
+            "Use `python agent.py connect --room <name>` only when debugging a specific room, "
+            "and open the frontend with the same room (for example `http://localhost:8080/?room=<name>`)."
         )
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
