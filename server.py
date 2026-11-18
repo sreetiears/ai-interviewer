@@ -77,6 +77,8 @@ INTERVIEW_MODE_ENV = "INTERVIEW_MODE"
 TOKEN_TTL_SECONDS = _env_int("TOKEN_TTL_SECONDS", 3600)
 
 # --- 令牌接口约束 -------------------------------------------------------------
+# 仅用于显式 room=ai-room（本地 `python agent.py connect --room ai-room`）。
+# 未指定 room 时改为签发 ai-{session_id}，避免多场面试挤进同一房间。
 DEFAULT_ROOM = "ai-room"
 MAX_IDENTIFIER_LENGTH = 64
 # 愿意签名的 LiveKit 房间名 / 身份。故意收窄：
@@ -553,7 +555,7 @@ class InterviewHttpHandler(BaseHTTPRequestHandler):
             self._respond_json(HTTPStatus.BAD_REQUEST, {"error": "invalid query string"})
             return
 
-        room_name = (params.get("room", [""])[0] or "").strip() or DEFAULT_ROOM
+        requested_room = (params.get("room", [""])[0] or "").strip()
         identity = (params.get("identity", [""])[0] or "").strip()
         if not identity:
             identity = "candidate-%s" % uuid.uuid4().hex[:4]
@@ -570,6 +572,13 @@ class InterviewHttpHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+
+        session_id = None
+        if requested_room:
+            room_name = requested_room
+        else:
+            session_id = uuid.uuid4().hex
+            room_name = "ai-%s" % session_id
 
         if not _is_valid_identifier(room_name):
             self._respond_json(
@@ -601,6 +610,7 @@ class InterviewHttpHandler(BaseHTTPRequestHandler):
             room_name,
             identity,
             mode,
+            session_id=session_id,
             focus_topics=focus_topics or None,
         )
         self._respond_json(

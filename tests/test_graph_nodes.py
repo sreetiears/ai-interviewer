@@ -35,7 +35,10 @@ async def test_self_intro_unqualified_flow():
 @pytest.mark.asyncio
 async def test_self_intro_qualified_flow():
     mock_llm = MagicMock()
-    mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="合格"))
+    mock_llm.ainvoke = AsyncMock(side_effect=[
+        AIMessage(content="合格"),
+        AIMessage(content="请简要阐述进程与线程的区别？"),
+    ])
 
     with patch("interview_graph._get_llm", return_value=mock_llm):
         state = {
@@ -44,8 +47,11 @@ async def test_self_intro_qualified_flow():
         result = await node_self_intro(state)
 
         assert result["current_phase"] == "pro_qa"
-        assert result["is_answering"] is False
+        assert result["is_answering"] is True
+        assert result["questions_asked"] == 1
         assert "专业知识" in result["reply"]
+        assert result["question_pro"] == "请简要阐述进程与线程的区别？"
+        assert result["question_pro"] in result["reply"]
 
 
 @pytest.mark.asyncio
@@ -501,7 +507,10 @@ async def test_final_report_marks_missing_subscore_and_keeps_valid_total():
 @pytest.mark.asyncio
 async def test_self_intro_retry_cap_forces_advance():
     mock_llm = MagicMock()
-    mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="不合格"))
+    mock_llm.ainvoke = AsyncMock(side_effect=[
+        AIMessage(content="不合格"),
+        AIMessage(content="请简要阐述进程与线程的区别？"),
+    ])
 
     with patch("interview_graph._get_llm", return_value=mock_llm):
         state = {
@@ -511,9 +520,11 @@ async def test_self_intro_retry_cap_forces_advance():
         result = await node_self_intro(state)
 
     assert result["current_phase"] == "pro_qa"
-    assert result["is_answering"] is False
-    assert result["questions_asked"] == 0
+    assert result["is_answering"] is True
+    assert result["questions_asked"] == 1
     assert "专业知识问答" in result["reply"]
+    assert result["question_pro"] == "请简要阐述进程与线程的区别？"
+    assert result["question_pro"] in result["reply"]
 
 
 @pytest.mark.asyncio
@@ -576,7 +587,11 @@ async def test_next_question_prompt_includes_questions_already_asked():
 async def test_quick_mode_advances_after_first_answer():
     mock_llm = MagicMock()
     mock_llm.ainvoke = AsyncMock(
-        side_effect=[AIMessage(content="不需要"), AIMessage(content="好的，专业课结束。")]
+        side_effect=[
+            AIMessage(content="不需要"),
+            AIMessage(content="好的，专业课结束。"),
+            AIMessage(content="请讲一次你在团队合作中遇到的冲突。"),
+        ]
     )
 
     with patch("interview_graph._get_llm", return_value=mock_llm):
@@ -593,5 +608,7 @@ async def test_quick_mode_advances_after_first_answer():
         result = await node_pro_qa(state)
 
     assert result["current_phase"] == "compre_qa"
-    assert result["questions_asked"] == 0
-    assert result["is_answering"] is False
+    assert result["questions_asked"] == 1
+    assert result["is_answering"] is True
+    assert result["question_compre"] == "请讲一次你在团队合作中遇到的冲突。"
+    assert result["question_compre"] in result["reply"]
