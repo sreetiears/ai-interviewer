@@ -8,6 +8,7 @@
      { type: "phase",  phase: "self_intro" | "pro_qa" | "compre_qa" | "report" | "completed" }
      { type: "report", report: { total_score, scores: {...}, core_weakness,
                                  improvement_tips, closing }, text?: string }
+     （scores 中缺失或无效的分项为 null，显示为「缺测」；没有 total_score 时只用 text）
 
    转写通过 RoomEvent.TranscriptionReceived 到达。后端发来的一切都视为
    不可信内容，只用 textContent 渲染。
@@ -971,29 +972,39 @@
    * 成绩单面板
    * ------------------------------------------------------------------ */
 
+  // 缺失或无效的值返回 null（缺测）。注意 Number(null) 是 0，所以不能直接用 Number。
+  function toFiniteNumber(value) {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value === 'string' && value.trim() !== '') {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    }
+    return null;
+  }
+
   function toScore(value) {
-    const number = Number(value);
-    return Number.isFinite(number) ? clamp(number, 0, 100) : 0;
+    const number = toFiniteNumber(value);
+    return number === null ? null : clamp(number, 0, 100);
   }
 
   function normalizeReport(raw) {
     if (!raw || typeof raw !== 'object') return null;
-    const scores = raw.scores && typeof raw.scores === 'object' ? raw.scores : null;
-    const totalRaw = Number(raw.total_score);
-    if (!scores && !Number.isFinite(totalRaw)) return null;
+    // 没有可用总分的成绩单视为解析失败（与后端一致），不由分项推算总分。
+    const total = toScore(raw.total_score);
+    if (total === null) return null;
+    const scores = raw.scores && typeof raw.scores === 'object' ? raw.scores : {};
     const dims = {
-      profession_know: toScore(scores ? scores.profession_know : 0),
-      exp_logic: toScore(scores ? scores.exp_logic : 0),
-      comper_quality: toScore(scores ? scores.comper_quality : 0)
+      profession_know: toScore(scores.profession_know),
+      exp_logic: toScore(scores.exp_logic),
+      comper_quality: toScore(scores.comper_quality)
     };
-    const average = (dims.profession_know + dims.exp_logic + dims.comper_quality) / 3;
-    const total = Number.isFinite(totalRaw) ? clamp(totalRaw, 0, 100) : Math.round(average);
     const weakTopics = Array.isArray(raw.weak_topics)
       ? raw.weak_topics.map(function (item) { return String(item || '').trim(); }).filter(Boolean)
       : [];
     return {
       total: total,
       dims: dims,
+      incomplete: DIM_KEYS.some(function (key) { return dims[key] === null; }),
       weakness: typeof raw.core_weakness === 'string' ? raw.core_weakness.trim() : '',
       tips: typeof raw.improvement_tips === 'string' ? raw.improvement_tips.trim() : '',
       closing: typeof raw.closing === 'string' ? raw.closing.trim() : '',
@@ -1070,17 +1081,19 @@
     const grade = gradeFor(data.total);
     setText(reportGrade, grade.label);
     if (reportGrade) reportGrade.dataset.level = grade.level;
-    setText(reportSummary, '本场面试已完成 · AI 考官依据对话转写与作答表现给出综合评估。');
+    setText(reportSummary, data.incomplete
+      ? '本场面试已完成 · 有分项缺测，本场成绩单不完整。'
+      : '本场面试已完成 · AI 考官依据对话转写与作答表现给出综合评估。');
     animateNumber(scoreValue, data.total, IS_DEMO ? 0 : 900);
     animateRing(data.total);
 
     DIM_KEYS.forEach(function (key, index) {
-      const score = clamp(data.dims[key], 0, 100);
-      setText(byId('dimValue-' + key), roundScore(score));
+      const score = data.dims[key];
+      setText(byId('dimValue-' + key), score === null ? '缺测' : roundScore(score));
       const fill = byId('dimFill-' + key);
       if (fill) {
         fill.classList.remove('is-in');
-        fill.style.setProperty('--pct', (score / 100).toFixed(3));
+        fill.style.setProperty('--pct', score === null ? '0' : (score / 100).toFixed(3));
         fill.style.transitionDelay = (index * 90) + 'ms';
         window.requestAnimationFrame(function () {
           fill.classList.add('is-in');

@@ -175,7 +175,7 @@ def test_question_prompt_includes_focus_and_snapshot():
     assert "计算机网络·TCP" in prompt
 
 
-def test_build_report_payload_clamps_and_defaults_scores():
+def test_build_report_payload_clamps_scores_and_keeps_missing_as_none():
     payload = _build_report_payload(
         {
             "total_score": 86,
@@ -184,14 +184,101 @@ def test_build_report_payload_clamps_and_defaults_scores():
         }
     )
 
-    assert payload["total_score"] == 86
+    assert payload["total_score"] == 86  # 只有一项缺测：保留有效总分，不用平均值替换
     assert payload["scores"]["profession_know"] == 100  # 截断到 100
     assert payload["scores"]["exp_logic"] == 88  # 接受数字字符串
-    assert payload["scores"]["comper_quality"] == 85  # None 时用默认值
+    assert payload["scores"]["comper_quality"] is None  # None 是缺测，不是默认分
+    assert payload["incomplete"] is True
     assert payload["core_weakness"]
     assert payload["improvement_tips"]
     assert payload["closing"]
     assert payload["weak_topics"] == ["os.memory"]
+
+
+@pytest.mark.parametrize(
+    ("total", "expected"),
+    [
+        (84, 84),  # 与三项平均 82 相差正好 2 分：保留
+        (80, 80),  # 低 2 分：保留
+        (85, 82),  # 高 3 分：改为平均
+        (79, 82),  # 低 3 分：同样改为平均
+    ],
+)
+def test_build_report_payload_pulls_total_to_mean_only_beyond_two_points(total, expected):
+    payload = _build_report_payload(
+        {
+            "total_score": total,
+            "scores": {"profession_know": 80, "exp_logic": 82, "comper_quality": 84},
+        }
+    )
+
+    assert payload["total_score"] == expected
+    assert payload["scores"] == {"profession_know": 80, "exp_logic": 82, "comper_quality": 84}
+    assert payload["incomplete"] is False
+
+
+def test_build_report_payload_rounds_the_mean_when_it_replaces_total():
+    # 三项平均 80.67，四舍五入为 81；总分 83 与平均相差 2.33 分，超过 2 分
+    payload = _build_report_payload(
+        {
+            "total_score": 83,
+            "scores": {"profession_know": 80, "exp_logic": 81, "comper_quality": 81},
+        }
+    )
+
+    assert payload["total_score"] == 81
+
+
+def test_build_report_payload_keeps_valid_total_when_a_subscore_is_missing():
+    payload = _build_report_payload(
+        {"total_score": 90, "scores": {"profession_know": 60, "comper_quality": 100}}
+    )
+
+    # 缺测不参与平均：若把缺测当 0，平均只有 53，总分会被错误地拉低。
+    assert payload["total_score"] == 90
+    assert payload["scores"] == {"profession_know": 60, "exp_logic": None, "comper_quality": 100}
+    assert payload["incomplete"] is True
+
+
+def test_build_report_payload_without_scores_marks_all_three_missing():
+    payload = _build_report_payload({"total_score": 78})
+
+    assert payload["total_score"] == 78
+    assert payload["scores"] == {"profession_know": None, "exp_logic": None, "comper_quality": None}
+    assert payload["incomplete"] is True
+
+
+def test_build_report_payload_keeps_real_zero_as_a_score_not_missing():
+    payload = _build_report_payload(
+        {"total_score": 0, "scores": {"profession_know": 0, "exp_logic": 0, "comper_quality": 0}}
+    )
+
+    assert payload["total_score"] == 0
+    assert payload["scores"] == {"profession_know": 0, "exp_logic": 0, "comper_quality": 0}
+    assert payload["incomplete"] is False
+
+
+@pytest.mark.parametrize("bad", ["高", "", "nan", True, [], {}, float("inf")])
+def test_build_report_payload_treats_non_numeric_subscores_as_missing(bad):
+    payload = _build_report_payload(
+        {"total_score": 80, "scores": {"profession_know": bad, "exp_logic": 75, "comper_quality": 80}}
+    )
+
+    assert payload["scores"]["profession_know"] is None
+    assert payload["total_score"] == 80
+    assert payload["incomplete"] is True
+
+
+@pytest.mark.parametrize("bad_total", [None, "高", "", True, float("inf"), float("nan")])
+def test_build_report_payload_rejects_unusable_total_even_when_subscores_exist(bad_total):
+    # 总分缺失时不由三项分数推算，走解析失败的回退。
+    with pytest.raises(ValueError):
+        _build_report_payload(
+            {
+                "total_score": bad_total,
+                "scores": {"profession_know": 80, "exp_logic": 82, "comper_quality": 84},
+            }
+        )
 
 
 def test_report_text_names_expression_logic_and_keeps_the_note():
@@ -228,6 +315,42 @@ def test_report_text_names_expression_logic_and_keeps_the_note():
     assert "表达说明：停顿很少。" in text
     assert "语速：2.0 字/秒" in text
     assert "缺测：1 轮" in text
+
+
+def test_report_text_shows_missing_subscore_as_missing_not_zero():
+    from interview_graph import _format_report_text
+
+    payload = _build_report_payload(
+        {
+            "total_score": 80,
+            "scores": {"profession_know": 78, "exp_logic": None, "comper_quality": 82},
+            "core_weakness": "例子少",
+            "improvement_tips": "补充例子",
+            "interviewer_closing": "辛苦了",
+        }
+    )
+
+    text = _format_report_text(payload)
+    assert "• 专业知识：78分" in text
+    assert "• 表达逻辑：缺测" in text
+    assert "• 综合素质：82分" in text
+    assert "表达逻辑：0分" not in text
+    assert "本场成绩单不完整" in text
+
+
+def test_report_text_of_complete_report_has_no_missing_mark():
+    from interview_graph import _format_report_text
+
+    payload = _build_report_payload(
+        {
+            "total_score": 80,
+            "scores": {"profession_know": 78, "exp_logic": 80, "comper_quality": 82},
+        }
+    )
+
+    text = _format_report_text(payload)
+    assert "缺测" not in text
+    assert "不完整" not in text
 
 
 @pytest.mark.asyncio
@@ -319,6 +442,60 @@ async def test_report_parse_failure_does_not_fabricate_scores():
     assert result["report_data"] == {}
     assert result["current_phase"] == "completed"
     assert "总评得分" not in result["final_report"]
+
+
+@pytest.mark.asyncio
+async def test_report_parse_failure_persists_total_as_missing_not_zero():
+    mock_llm = MagicMock()
+    mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="{}"))
+    store = MagicMock()
+
+    with patch("interview_graph._get_llm", return_value=mock_llm), patch(
+        "interview_graph.get_store", return_value=store
+    ):
+        await node_report(
+            {"raw_scores": "【记录】", "learner_id": "learner-0123456789ab", "session_id": "s-1"}
+        )
+
+    saved = store.record_session.call_args.kwargs["report"]
+    assert saved["total_score"] is None
+
+
+@pytest.mark.asyncio
+async def test_final_report_pulls_conflicting_total_to_subscore_mean():
+    mock_llm = MagicMock()
+    mock_json = (
+        '{"total_score": 95, "scores": {"profession_know": 80, "exp_logic": 80, "comper_quality": 80}, '
+        '"core_weakness": "例子少", "improvement_tips": "补充例子", "interviewer_closing": "辛苦了"}'
+    )
+    mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=mock_json))
+
+    with patch("interview_graph._get_llm", return_value=mock_llm):
+        result = await node_report({"raw_scores": "【记录】"})
+
+    assert result["report_data"]["total_score"] == 80
+    assert "总评得分：80分" in result["final_report"]
+    assert "总评得分 80 分" in result["reply"]
+
+
+@pytest.mark.asyncio
+async def test_final_report_marks_missing_subscore_and_keeps_valid_total():
+    mock_llm = MagicMock()
+    mock_json = (
+        '{"total_score": 90, "scores": {"profession_know": 88, "exp_logic": null, "comper_quality": 92}, '
+        '"core_weakness": "例子少", "improvement_tips": "补充例子", "interviewer_closing": "辛苦了"}'
+    )
+    mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=mock_json))
+
+    with patch("interview_graph._get_llm", return_value=mock_llm):
+        result = await node_report({"raw_scores": "【记录】"})
+
+    report = result["report_data"]
+    assert report["total_score"] == 90
+    assert report["scores"]["exp_logic"] is None
+    assert report["incomplete"] is True
+    assert "表达逻辑：缺测" in result["final_report"]
+    assert "总评得分：90分" in result["final_report"]
 
 
 @pytest.mark.asyncio

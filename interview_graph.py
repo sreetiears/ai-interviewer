@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import re
 from functools import lru_cache
 from typing import Any, Literal, TypedDict
@@ -733,28 +734,41 @@ DEFAULT_TIPS = "建议巩固底层原理并增加实际项目实践"
 DEFAULT_CLOSING = "同学，今天的面试到这里就圆满结束了。感谢你的参与，结果请等待官方通知。"
 
 
-def _clamp_score(value: Any, default: int) -> int:
-    """把模型给出的分数收成 [0, 100] 内的整数。"""
+_SCORE_KEYS = ("profession_know", "exp_logic", "comper_quality")
+
+
+def _clamp_score(value: Any) -> int | None:
+    """把模型给出的分数收成 [0, 100] 内的整数；缺失或不是有限数字时返回 None（缺测）。"""
+    if isinstance(value, bool):
+        return None
     try:
-        score = int(round(float(value)))
+        score = float(value)
     except (TypeError, ValueError):
-        return default
-    return max(0, min(100, score))
+        return None
+    if not math.isfinite(score):
+        return None
+    return max(0, min(100, int(round(score))))
 
 
 def _build_report_payload(data: dict[str, Any]) -> dict[str, Any]:
     """把大模型的 JSON 成绩单整理成前端使用的结构。
 
     没有可用 ``total_score`` 的成绩单视为解析失败：展示一个编造的默认分，
-    比承认成绩单失败更糟。
+    比承认成绩单失败更糟。分项缺失或无效时记为 ``None``（缺测），不填默认分，
+    也不参与平均。三个分项都有时，若总分与三项平均相差超过 2 分，总分改为四舍五入后的平均。
     """
-    try:
-        total_score = int(round(float(data.get("total_score"))))
-    except (TypeError, ValueError):
-        raise ValueError("report JSON is missing a usable total_score") from None
-    total_score = max(0, min(100, total_score))
+    total_score = _clamp_score(data.get("total_score"))
+    if total_score is None:
+        raise ValueError("report JSON is missing a usable total_score")
 
     raw_scores = data.get("scores") if isinstance(data.get("scores"), dict) else {}
+    scores = {key: _clamp_score(raw_scores.get(key)) for key in _SCORE_KEYS}
+    measured = [score for score in scores.values() if score is not None]
+    if len(measured) == len(_SCORE_KEYS):
+        mean = sum(measured) / len(measured)
+        if abs(total_score - mean) > 2:
+            total_score = round(mean)
+
     weak_topics: list[str] = []
     raw_weak = data.get("weak_topics")
     if isinstance(raw_weak, list):
@@ -764,11 +778,8 @@ def _build_report_payload(data: dict[str, Any]) -> dict[str, Any]:
                 weak_topics.append(topic)
     return {
         "total_score": total_score,
-        "scores": {
-            "profession_know": _clamp_score(raw_scores.get("profession_know"), 80),
-            "exp_logic": _clamp_score(raw_scores.get("exp_logic"), 85),
-            "comper_quality": _clamp_score(raw_scores.get("comper_quality"), 85),
-        },
+        "scores": scores,
+        "incomplete": len(measured) < len(_SCORE_KEYS),
         "core_weakness": str(data.get("core_weakness") or DEFAULT_WEAKNESS).strip(),
         "improvement_tips": str(data.get("improvement_tips") or DEFAULT_TIPS).strip(),
         "closing": str(data.get("interviewer_closing") or DEFAULT_CLOSING).strip(),
@@ -808,18 +819,24 @@ def _format_delivery_block(delivery: dict[str, Any] | None) -> str:
     return "\n".join(lines) + "\n\n"
 
 
+def _format_score(score: int | None) -> str:
+    return "缺测" if score is None else f"{score}分"
+
+
 def _format_report_text(report: dict[str, Any]) -> str:
     scores = report["scores"]
+    incomplete_note = "⚠️ 本场成绩单不完整：有分项缺测。\n" if report.get("incomplete") else ""
     return (
         "━━━━━━━━━━━━━━━\n"
         "🎓 考研复试模拟成绩单\n"
         "━━━━━━━━━━━━━━━\n"
         f"🏆 总评得分：{report['total_score']}分\n\n"
         "📊 分项维度：\n"
-        f"• 专业知识：{scores['profession_know']}分\n"
-        f"• 表达逻辑：{scores['exp_logic']}分\n"
+        f"• 专业知识：{_format_score(scores['profession_know'])}\n"
+        f"• 表达逻辑：{_format_score(scores['exp_logic'])}\n"
         f"{_format_expression_note(report.get('exp_logic_note') or '')}"
-        f"• 综合素质：{scores['comper_quality']}分\n\n"
+        f"• 综合素质：{_format_score(scores['comper_quality'])}\n"
+        f"{incomplete_note}\n"
         f"{_format_delivery_block(report.get('delivery'))}"
         "❌ 核心不足：\n"
         f"{report['core_weakness']}\n\n"
@@ -906,7 +923,7 @@ async def _generate_report(state: InterviewState) -> dict:
         _persist_learner_memory(
             state,
             {
-                "total_score": 0,
+                "total_score": None,
                 "core_weakness": DEFAULT_WEAKNESS,
                 "improvement_tips": DEFAULT_TIPS,
                 "weak_topics": _weak_topics_from_turns(_parse_turn_tags(state.get("turn_tags"))),
