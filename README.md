@@ -160,9 +160,19 @@ python server.py
 
 #### 终端 3：启动 AI 面试官 Agent
 
+前端默认不再请求 `ai-room`，而是使用服务端返回的 `ai-{session_id}`（每场一个房间）。本地应启动 worker，让它自动接新房间：
+
+```bash
+python agent.py dev
+```
+
+只有在显式指定同一房间做调试时，才使用：
+
 ```bash
 python agent.py connect --room ai-room
 ```
+
+这时前端也必须带同样的 `room` 参数（例如请求 `/api/token?room=ai-room`），否则考官和考生会不在同一间。
 
 > 若 `livekit-server` 不在 PATH，可参考 `scripts/install_livekit_tools.sh`（Linux/WSL）。
 

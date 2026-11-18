@@ -169,9 +169,11 @@ python server.py
 ```
 
 ```bash
-# 终端 3：AI 考官
-python agent.py connect --room ai-room
+# 终端 3：AI 考官（自动接服务端签发的 ai-{session_id}）
+python agent.py dev
 ```
+
+只有在显式指定同一房间做调试时，才使用 `python agent.py connect --room ai-room`；这时前端也必须请求 `/api/token?room=ai-room`，否则双方不在同一间。
 
 浏览器打开 `http://localhost:8080`。没有 LiveKit / Key 时打开 `http://localhost:8080/?demo=1`。
 
@@ -193,7 +195,7 @@ python agent.py connect --room ai-room
 
 | 术语 | 在本项目里的含义 |
 | --- | --- |
-| Room | LiveKit 的一个房间；本项目固定 `ai-room` |
+| Room | LiveKit 的一个房间；默认每场 `ai-{session_id}`，调试时可显式指定 `ai-room` |
 | Participant | 房间成员；考生 identity 形如 `candidate-xxxx`，AI 是另一个 participant |
 | Track | 一条媒体流；本项目只订阅音频 |
 | Token | 服务端签发的 JWT，带 `roomJoin` 权限和 metadata |
