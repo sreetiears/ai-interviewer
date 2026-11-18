@@ -297,7 +297,7 @@ curl -i "http://localhost:8080/%2e%2e%2fREADME.md"
 
 ### 目标
 
-`python agent.py connect --room ai-room` 启动后，考生进房能听到开场白。
+`python agent.py dev` 启动后，考生经默认前端进场（房间为 `ai-{session_id}`），应能听到开场白。
 
 ### 动手
 
@@ -320,10 +320,10 @@ python server.py
 
 ```bash
 # 终端 3
-python agent.py connect --room ai-room
+python agent.py dev
 ```
 
-浏览器进考场。
+浏览器进考场。如果改用 `python agent.py connect --room ai-room`，前端或 token 请求也必须带同样的 `room=ai-room`，否则考官和考生不在同一间。
 
 ### 期望
 

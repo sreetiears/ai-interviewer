@@ -181,6 +181,12 @@ CORS 默认**不发**任何头：同源部署不需要。只有 `ALLOWED_ORIGIN`
 ### 请求
 
 ```http
+GET /api/token?identity=candidate-1&mode=real
+```
+
+未指定 `room` 时，服务端签发 `ai-{session_id}`，每场一个房间。只有调试需要固定房间时，才显式传 `room`：
+
+```http
 GET /api/token?room=ai-room&identity=candidate-1&mode=real
 ```
 
@@ -188,7 +194,7 @@ GET /api/token?room=ai-room&identity=candidate-1&mode=real
 
 | 参数 | 必填 | 规则 | 默认 |
 | --- | --- | --- | --- |
-| `room` | 否 | `[A-Za-z0-9_.@-]{1,64}` | `ai-room` |
+| `room` | 否 | `[A-Za-z0-9_.@-]{1,64}` | 未指定时为 `ai-{session_id}` |
 | `identity` | 否 | 同上 | `candidate-<4 hex>` |
 | `mode` | 否 | `quick` / `real` | 环境变量或 `quick` |
 
@@ -235,17 +241,17 @@ def create_token(room_name, identity, mode=DEFAULT_INTERVIEW_MODE,
 ```json
 {
   "serverUrl": "ws://127.0.0.1:7880",
-  "roomName": "ai-room",
+  "roomName": "ai-<session_id>",
   "identity": "candidate-1",
   "token": "eyJ...",
   "interviewMode": "real"
 }
 ```
 
-前端用这四个字段连接：
+前端用返回的 `roomName` 入房，不要写死 `ai-room`：
 
 ```js
-const connection = await (await fetch('/api/token?room=ai-room&mode=real')).json();
+const connection = await (await fetch('/api/token?mode=real')).json();
 await room.connect(connection.serverUrl, connection.token);
 ```
 
@@ -291,8 +297,10 @@ curl -i http://localhost:8080/api/health
 ```
 
 ```bash
-curl -s "http://localhost:8080/api/token?room=ai-room&mode=real" | python -m json.tool
+curl -s "http://localhost:8080/api/token?mode=real" | python -m json.tool
 ```
+
+期望：`roomName` 形如 `ai-<session_id>`，两次请求得到不同房间。调试固定房间时再加 `room=ai-room`。
 
 ```bash
 curl -i "http://localhost:8080/api/token?mode=turbo"
