@@ -47,6 +47,8 @@
   const params = bootSearch;
   const IS_DEMO = params.get('demo') === '1';
   const DEMO_SCENE = IS_DEMO ? (params.get('scene') || 'auto') : null;
+  // 仅当地址带 ?room= 时传给 /api/token；缺省仍由服务端签发 ai-{session_id}。
+  const REQUESTED_ROOM = (params.get('room') || '').trim();
 
   const PHASES = [
     { key: 'self_intro', label: '自我介绍' },
@@ -1509,16 +1511,20 @@
     const focusQuery = pendingFocusTopics.length
       ? '&focus=' + encodeURIComponent(pendingFocusTopics.join(','))
       : '';
+    const roomQuery = REQUESTED_ROOM
+      ? '&room=' + encodeURIComponent(REQUESTED_ROOM)
+      : '';
     logSystem(
       '正在获取入场凭证（' + MODE_LABELS[interviewMode].name +
-      (pendingFocusTopics.length ? ' · 加强薄弱点' : '') + '）…'
+      (pendingFocusTopics.length ? ' · 加强薄弱点' : '') +
+      (REQUESTED_ROOM ? ' · 房间 ' + REQUESTED_ROOM : '') + '）…'
     );
 
     let room = null;
     try {
       const response = await fetch(
         '/api/token?mode=' + encodeURIComponent(interviewMode) +
-        '&identity=' + encodeURIComponent(learnerId) + focusQuery,
+        '&identity=' + encodeURIComponent(learnerId) + focusQuery + roomQuery,
         {
           headers: { Accept: 'application/json' },
           cache: 'no-store'
