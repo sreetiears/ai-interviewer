@@ -464,7 +464,7 @@ function loadLiveKit() {
 2. 演示模式 → restartDemo()
 3. 清错误、清成绩单、连接状态 connecting
 4. loadLiveKit()
-5. fetch('/api/token?room=ai-room&mode=...')
+5. fetch('/api/token?mode=...')（不要写死 `room=ai-room`；用返回的 `roomName` 入房）
 6. 用服务端返回的 interviewMode 校准本地选择
 7. new LK.Room({adaptiveStream:true, dynacast:true})
 8. wireRoom(room)

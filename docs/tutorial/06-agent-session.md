@@ -27,13 +27,11 @@ python agent.py connect --room ai-room
 3. 等待 LiveKit 分配 job；
 4. 每来一个房间，调用一次 `entrypoint(ctx)`。
 
-适合：生产、多个房间、由 LiveKit 调度。
+适合：生产、多个房间、由 LiveKit 调度。现在也是本地默认推荐：前端默认不再请求 `ai-room`，而是使用服务端返回的 `ai-{session_id}`，worker 会自动接这些新房间。
 
 ### `connect --room ai-room`
 
-LiveKit CLI 会直接创建一个 job 并连接指定房间，不经过 worker 调度。适合：本地开发、单房间调试。
-
-README 推荐本地用 `connect`，因为 `dev` 只注册 worker，不会主动进房，容易误以为“没反应”。
+LiveKit CLI 会直接创建一个 job 并连接指定房间，不经过 worker 调度。仅在调试时、并且前端也显式请求同一个房间时使用。若考官执行 `connect --room ai-room`，而前端走默认的 `/api/token`（不带 `room`），双方会不在同一间。
 
 > 如果 `livekit-server` 不在 PATH，参考 `scripts/install_livekit_tools.sh`（Linux/WSL）。
 
@@ -329,11 +327,11 @@ if __name__ == "__main__":
 
 | 命令 | 行为 |
 | --- | --- |
-| `python agent.py dev` | 注册 worker，等待 job；本地单房间不推荐 |
-| `python agent.py connect --room ai-room` | 直接进房，本地调试推荐 |
+| `python agent.py dev` | 注册 worker，等待 job；本地默认推荐，可自动接 `ai-{session_id}` |
+| `python agent.py connect --room ai-room` | 直接进指定房间；仅当前端也带同一 `room` 参数时使用 |
 | `python agent.py start` | 生产 worker 模式 |
 
-`dev` 的 warning 是刻意加的：很多人第一次跑 `dev` 发现考官不说话，以为代码坏了。
+源码里 `dev` 的 warning 仍可能提示 `connect --room ai-room`。那只适用于前后端都显式使用同一房间的调试；按现在的前端默认路径，本地应使用 `dev`，否则考官会停在 `ai-room`，考生进的是新房间。
 
 ---
 
@@ -358,7 +356,8 @@ if __name__ == "__main__":
 
 | 现象 | 原因 | 解决 |
 | --- | --- | --- |
-| `dev` 启动后没反应 | 只注册 worker，没有 job | 本地用 `connect --room ai-room` |
+| `dev` 启动后没反应 | 只注册 worker，还没有考生进房 | 先打开前端进入考场，让 LiveKit 把新房间 job 派给 worker |
+| 考官在 `ai-room`、考生进不了同一间 | 用了 `connect --room ai-room`，但前端默认不再请求该房间 | 改用 `python agent.py dev`；或让前端也请求 `/api/token?room=ai-room` |
 | 考官不说话 | STT/TTS Key 无效、麦克风未授权、房间不对 | 看 agent 日志；先跑 `?demo=1` 排除前端 |
 | 考生说一句，考官回两句 | 预生成或重复消费 | 确认 `preemptive_generation=False` |
 | 重新进考场直接“面试已结束” | thread_id 复用了旧会话 | 确认 token 带 `session_id`，服务端已更新 |
@@ -369,7 +368,7 @@ if __name__ == "__main__":
 
 ## 6.10 检查点
 
-1. `dev` 和 `connect` 的区别是什么？为什么本地推荐后者？
+1. `dev` 和 `connect` 的区别是什么？为什么本地默认推荐 `dev`？
 2. 为什么 `thread_id` 优先用 token 里的 `session_id`？
 3. `preemptive_generation=True` 会带来什么具体问题？
 4. `session.say` 和 `generate_reply` 在语义上有什么不同？

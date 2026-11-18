@@ -273,7 +273,7 @@ http://localhost:8080/?demo=1&scene=report
 | 浏览器 | DevTools Console / Network / 麦克风图标 |
 | 前端状态 | 顶部状态徽章、错误卡 |
 | LiveKit | `livekit-server --dev` 日志、房间 participant 列表 |
-| Agent | `python agent.py connect` 控制台日志 |
+| Agent | `python agent.py dev` 控制台日志 |
 | STT/TTS | 转写区、是否有声音 |
 | LLM | agent 日志里的 reply 前 60 字、`/api/health` 不检查 LLM |
 
@@ -288,7 +288,7 @@ http://localhost:8080/?demo=1&scene=report
 | 页面 404 | 没在项目根目录启动 | `python server.py` 的 cwd |
 | token 400 invalid mode | 传了 `turbo` 之类 | 用 quick/real |
 | token 403/404 | 静态路径穿越/文件不存在 | 看 URL 是否有多余 `..` |
-| agent 不说话 | `dev` 只注册 worker | 用 `connect --room ai-room` |
+| agent 不说话 | worker 没接到考生所在房间 | 默认用 `python agent.py dev`；只有前后端都显式指定同一房间时才用 `connect --room ai-room` |
 | 考官重复上一句 | 某节点没返回 `reply` | 看 `test_graph_flow` 是否过 |
 | 成绩单反复弹 | 适配器去重失效 | 看 `should_emit_report` 测试 |
 | 重新进考场直接结束 | 复用旧 thread | token metadata 有没有 `session_id` |
