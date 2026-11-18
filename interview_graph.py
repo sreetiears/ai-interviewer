@@ -174,6 +174,13 @@ _DELIVERY_SYSTEM_ADDENDUM = (
 )
 
 
+# 成绩单里的知识库段落只作为专业知识评分的参考，不是考生的话，综合素质不得引用。
+_REPORT_RAG_NOTE = (
+    "以下知识库段落不是考生的回答，只作为专业知识（scores.profession_know）评分的参考；"
+    "不得用于综合素质（scores.comper_quality）评分。"
+)
+
+
 def report_system_prompt(enabled: bool) -> str:
     """关掉表达特征时，系统提示词与原来的纯文字成绩单相同。"""
     if not enabled:
@@ -207,8 +214,8 @@ def _question_prompt(
 ) -> str:
     """把已经问过的问题、跨场画像与加强方向追加到出题提示词后面。
 
-    ``include_rag=True`` 时（仅专业课出题）追加开场预取的 ``rag_context``；
-    无缓存或为空时静默跳过，不在热路径做 embed/检索。
+    ``include_rag=True`` 时（专业课主题目与专业课追问）追加开场预取的 ``rag_context``；
+    无缓存或为空时静默跳过，不在热路径做 embed/检索。综合素质不传此参数。
     """
     parts = [base]
     asked = str(state.get("asked_questions", "") or "").strip()
@@ -531,7 +538,13 @@ async def node_pro_qa(state: InterviewState) -> dict:
             _get_llm(temperature=0.4),
             [
                 SystemMessage(content=PRO_FOLLOWUP_SYSTEM),
-                HumanMessage(content=f"【原问题】{current_q}\n【考生回答】{query}"),
+                HumanMessage(
+                    content=_question_prompt(
+                        f"【原问题】{current_q}\n【考生回答】{query}",
+                        state,
+                        include_rag=True,
+                    )
+                ),
             ],
         )
         return {
@@ -864,9 +877,14 @@ async def _generate_report(state: InterviewState) -> dict:
     enabled = delivery_metrics_enabled()
     turns = state.get("delivery_turns") or []
     llm = _get_llm(temperature=0.2)
+    user_content = build_report_user_content(archive, turns, enabled=enabled)
+    # 开场预取的专业知识段落只读缓存（不检索）；为空时提示词与原来逐字相同。
+    rag_block = str(state.get("rag_context", "") or "").strip()
+    if rag_block:
+        user_content = f"{user_content}\n\n{_REPORT_RAG_NOTE}\n{rag_block}"
     report_res = await llm.ainvoke([
         SystemMessage(content=report_system_prompt(enabled)),
-        HumanMessage(content=build_report_user_content(archive, turns, enabled=enabled)),
+        HumanMessage(content=user_content),
     ])
 
     raw_text = report_res.content.strip()
