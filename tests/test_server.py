@@ -253,13 +253,28 @@ def test_token_endpoint_defaults(http_port, monkeypatch):
         "learnerId",
         "focusTopics",
     }
-    assert payload["roomName"] == "ai-room"
+    assert payload["roomName"] != "ai-room"
+    assert payload["roomName"] == "ai-%s" % token_metadata(payload["token"])["session_id"]
+    assert server.IDENTIFIER_RE.fullmatch(payload["roomName"])
     assert payload["identity"].startswith("candidate-")
     assert payload["interviewMode"] == "quick"
     metadata = token_metadata(payload["token"])
     assert metadata["interview_mode"] == "quick"
     assert metadata["session_id"]
     assert metadata["learner_id"] == payload["identity"]
+
+    status, _, body_again = http_request(http_port, "GET", "/api/token")
+    assert status == 200
+    second = json.loads(body_again)
+    assert second["roomName"] != payload["roomName"]
+    assert server.IDENTIFIER_RE.fullmatch(second["roomName"])
+    assert second["roomName"] == "ai-%s" % token_metadata(second["token"])["session_id"]
+
+    status, _, body_explicit = http_request(http_port, "GET", "/api/token?room=ai-room")
+    assert status == 200
+    explicit = json.loads(body_explicit)
+    assert explicit["roomName"] == "ai-room"
+    assert server.IDENTIFIER_RE.fullmatch(explicit["roomName"])
 
 
 # ---------------------------------------------------------------------------

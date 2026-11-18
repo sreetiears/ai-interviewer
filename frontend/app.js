@@ -1517,7 +1517,7 @@
     let room = null;
     try {
       const response = await fetch(
-        '/api/token?room=ai-room&mode=' + encodeURIComponent(interviewMode) +
+        '/api/token?mode=' + encodeURIComponent(interviewMode) +
         '&identity=' + encodeURIComponent(learnerId) + focusQuery,
         {
           headers: { Accept: 'application/json' },

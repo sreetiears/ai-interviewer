@@ -401,6 +401,65 @@ async def _reply_text(llm: Any, messages: list[Any]) -> str:
     return "".join(parts).strip()
 
 
+def _emit_reply_prefix(text: str) -> None:
+    """把已有台词写入自定义流，便于和后续出题拼成同一轮回复。"""
+    if not text:
+        return
+    try:
+        writer = get_stream_writer()
+    except Exception:
+        return
+    writer({"type": "delta", "text": text})
+
+
+async def _start_pro_question(state: InterviewState, *, questions_asked: int) -> dict:
+    """提出一道专业课主题目，并把状态切到等待作答。"""
+    prompt = (
+        "请出一道题：只问一个能口头答完的机制、取舍或故障。"
+        if questions_asked == 0
+        else "请再出一道题，不要重复已经问过的。仍只问一个机制、取舍或故障。"
+    )
+    question = await _reply_text(
+        _get_llm(temperature=0.6),
+        [
+            SystemMessage(content=PRO_QUESTION_SYSTEM),
+            HumanMessage(content=_question_prompt(prompt, state, include_rag=True)),
+        ],
+    )
+    return {
+        "question_pro": question,
+        "reply": question,
+        "is_answering": True,
+        "follow_up_count": 0,
+        "questions_asked": questions_asked + 1,
+        "asked_questions": _remember_question(state, question),
+    }
+
+
+async def _start_compre_question(state: InterviewState, *, questions_asked: int) -> dict:
+    """提出一道综合素质主题目，并把状态切到等待作答。"""
+    prompt = (
+        "从读研动机、职业规划、科研或竞赛经历、团队合作冲突、抗压里挑一个，问一个具体场景。"
+        if questions_asked == 0
+        else "再挑一个还没问过的话题，问一个具体场景。不评价考生的性格。"
+    )
+    question = await _reply_text(
+        _get_llm(temperature=0.7),
+        [
+            SystemMessage(content=COMPRE_QUESTION_SYSTEM),
+            HumanMessage(content=_question_prompt(prompt, state)),
+        ],
+    )
+    return {
+        "question_compre": question,
+        "reply": question,
+        "is_answering": True,
+        "follow_up_count": 0,
+        "questions_asked": questions_asked + 1,
+        "asked_questions": _remember_question(state, question),
+    }
+
+
 # ==========================================
 # 图节点
 # ==========================================
@@ -447,24 +506,26 @@ async def node_self_intro(state: InterviewState) -> dict:
     if unqualified:
         # 重试额度用尽：仍然往下走，保证面试总能结束。
         logger.info("[LangGraph] Self intro retry budget exhausted, forcing transition to pro_qa")
+        transition = "好的，自我介绍部分我们先到这里。接下来进入专业知识问答环节，请听题。"
+        _emit_reply_prefix(transition + "\n")
+        started = await _start_pro_question({**state, "asked_questions": ""}, questions_asked=0)
         return {
-            "reply": "好的，自我介绍部分我们先到这里。接下来进入专业知识问答环节，请听题。",
+            **started,
+            "reply": f"{transition}\n{started['reply']}",
             "current_phase": "pro_qa",
-            "is_answering": False,
             "intro_attempts": attempts,
-            "questions_asked": 0,
-            "asked_questions": "",
             "raw_scores": state.get("raw_scores", "") + f"【自我介绍(达到重试上限)】\n{query}\n",
         }
 
     logger.info("[LangGraph] Self intro qualified, transitioning to pro_qa")
+    transition = "很好，自我介绍通过。接下来我们正式进入专业知识问答环节，请准备好。"
+    _emit_reply_prefix(transition + "\n")
+    started = await _start_pro_question({**state, "asked_questions": ""}, questions_asked=0)
     return {
-        "reply": "很好，自我介绍通过。接下来我们正式进入专业知识问答环节，请准备好。",
+        **started,
+        "reply": f"{transition}\n{started['reply']}",
         "current_phase": "pro_qa",
-        "is_answering": False,
         "intro_attempts": attempts,
-        "questions_asked": 0,
-        "asked_questions": "",
         "raw_scores": state.get("raw_scores", "") + f"【自我介绍(合格)】\n{query}\n",
     }
 
@@ -484,30 +545,9 @@ async def node_pro_qa(state: InterviewState) -> dict:
         questions_asked,
         settings["questions_per_phase"],
     )
-    llm = _get_llm(temperature=0.6)
-
     # 没有待答题目：提出本阶段当前的主题目。
     if not is_answering or not current_q:
-        prompt = (
-            "请出一道题：只问一个能口头答完的机制、取舍或故障。"
-            if questions_asked == 0
-            else "请再出一道题，不要重复已经问过的。仍只问一个机制、取舍或故障。"
-        )
-        question = await _reply_text(
-            llm,
-            [
-                SystemMessage(content=PRO_QUESTION_SYSTEM),
-                HumanMessage(content=_question_prompt(prompt, state, include_rag=True)),
-            ],
-        )
-        return {
-            "question_pro": question,
-            "reply": question,
-            "is_answering": True,
-            "follow_up_count": 0,
-            "questions_asked": questions_asked + 1,
-            "asked_questions": _remember_question(state, question),
-        }
+        return await _start_pro_question(state, questions_asked=questions_asked)
 
     # 考生已经回答了这道题
     archive = state.get("raw_scores", "") + f"【专业提问】\n{current_q}\n【考生回答】\n{query}\n"
@@ -565,26 +605,9 @@ async def node_pro_qa(state: InterviewState) -> dict:
             questions_asked + 1,
             settings["questions_per_phase"],
         )
-        next_question = await _reply_text(
-            llm,
-            [
-                SystemMessage(content=PRO_QUESTION_SYSTEM),
-                HumanMessage(
-                    content=_question_prompt(
-                        "请再出一道题，不要重复已经问过的。仍只问一个机制、取舍或故障。",
-                        tagged_state,
-                        include_rag=True,
-                    )
-                ),
-            ],
-        )
+        started = await _start_pro_question(tagged_state, questions_asked=questions_asked)
         return {
-            "question_pro": next_question,
-            "reply": next_question,
-            "is_answering": True,
-            "follow_up_count": 0,
-            "questions_asked": questions_asked + 1,
-            "asked_questions": _remember_question(state, next_question),
+            **started,
             "raw_scores": archive,
             "turn_tags": turn_tags,
         }
@@ -597,13 +620,14 @@ async def node_pro_qa(state: InterviewState) -> dict:
             HumanMessage(content="告知考生专业知识问答结束，准备进入综合素质问答。"),
         ],
     )
+    suffix = " 接下来我想了解一些你的综合经历与个人规划。"
+    prefix = f"{transition_msg}{suffix}\n"
+    _emit_reply_prefix(suffix + "\n")
+    started = await _start_compre_question({**state, "asked_questions": ""}, questions_asked=0)
     return {
-        "reply": f"{transition_msg} 接下来我想了解一些你的综合经历与个人规划。",
+        **started,
+        "reply": prefix + started["reply"],
         "current_phase": "compre_qa",
-        "is_answering": False,
-        "follow_up_count": 0,
-        "questions_asked": 0,
-        "asked_questions": "",
         "raw_scores": archive,
         "turn_tags": turn_tags,
     }
@@ -627,26 +651,7 @@ async def node_compre_qa(state: InterviewState) -> dict:
     llm = _get_llm(temperature=0.7)
 
     if not is_answering or not current_q:
-        prompt = (
-            "从读研动机、职业规划、科研或竞赛经历、团队合作冲突、抗压里挑一个，问一个具体场景。"
-            if questions_asked == 0
-            else "再挑一个还没问过的话题，问一个具体场景。不评价考生的性格。"
-        )
-        question = await _reply_text(
-            llm,
-            [
-                SystemMessage(content=COMPRE_QUESTION_SYSTEM),
-                HumanMessage(content=_question_prompt(prompt, state)),
-            ],
-        )
-        return {
-            "question_compre": question,
-            "reply": question,
-            "is_answering": True,
-            "follow_up_count": 0,
-            "questions_asked": questions_asked + 1,
-            "asked_questions": _remember_question(state, question),
-        }
+        return await _start_compre_question(state, questions_asked=questions_asked)
 
     # 考生已经回答了综合素质题
     archive = state.get("raw_scores", "") + f"【综合提问】\n{current_q}\n【考生回答】\n{query}\n"
@@ -697,25 +702,9 @@ async def node_compre_qa(state: InterviewState) -> dict:
             questions_asked + 1,
             settings["questions_per_phase"],
         )
-        next_question = await _reply_text(
-            llm,
-            [
-                SystemMessage(content=COMPRE_QUESTION_SYSTEM),
-                HumanMessage(
-                    content=_question_prompt(
-                        "再挑一个还没问过的话题，问一个具体场景。不评价考生的性格。",
-                        tagged_state,
-                    )
-                ),
-            ],
-        )
+        started = await _start_compre_question(tagged_state, questions_asked=questions_asked)
         return {
-            "question_compre": next_question,
-            "reply": next_question,
-            "is_answering": True,
-            "follow_up_count": 0,
-            "questions_asked": questions_asked + 1,
-            "asked_questions": _remember_question(state, next_question),
+            **started,
             "raw_scores": archive,
             "turn_tags": turn_tags,
         }

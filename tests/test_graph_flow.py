@@ -67,20 +67,17 @@ async def test_full_interview_flow_produces_report_on_last_answer():
             config,
         )
         assert state["current_phase"] == "pro_qa"
-        assert state["is_answering"] is False
-
-        state = await graph.ainvoke({"user_query": "好的老师，我准备好了。"}, config)
-        assert state["current_phase"] == "pro_qa"
-        assert state["question_pro"] == "请解释进程与线程的区别。"
         assert state["is_answering"] is True
+        assert state["questions_asked"] == 1
+        assert state["question_pro"] == "请解释进程与线程的区别。"
+        assert "请解释进程与线程的区别。" in state["reply"]
 
         state = await graph.ainvoke({"user_query": "进程是资源分配单位，线程是调度单位。"}, config)
         assert state["current_phase"] == "compre_qa"
-        assert state["is_answering"] is False
-
-        state = await graph.ainvoke({"user_query": "好的。"}, config)
-        assert state["question_compre"] == "请讲一次你在团队合作中遇到的冲突。"
         assert state["is_answering"] is True
+        assert state["questions_asked"] == 1
+        assert state["question_compre"] == "请讲一次你在团队合作中遇到的冲突。"
+        assert "请讲一次你在团队合作中遇到的冲突。" in state["reply"]
 
         # 最后一次回答必须同时结束面试并给出成绩单。
         state = await graph.ainvoke(
@@ -113,17 +110,17 @@ async def test_real_mode_asks_three_questions_per_phase():
             config,
         )
         assert state["current_phase"] == "pro_qa"
-
-        state = await graph.ainvoke({"user_query": "好的老师。"}, config)  # 提出第 1 题
+        assert state["is_answering"] is True
         assert state["questions_asked"] == 1
-        for _ in range(3):  # 连续回答三道主题目
+
+        for _ in range(3):  # 连续回答三道主题目；第 3 题答完后当轮进入综合素质并出第一题
             state = await graph.ainvoke({"user_query": "我的回答。"}, config)
         assert state["current_phase"] == "compre_qa"
         assert state["raw_scores"].count("【专业提问】") == 3
+        assert state["is_answering"] is True
+        assert state["questions_asked"] == 1
 
     with patch("interview_graph._get_llm", return_value=_mock_llm()):
-        state = await graph.ainvoke({"user_query": "好的老师。"}, config)  # 提出综合素质第 1 题
-        assert state["questions_asked"] == 1
         for _ in range(3):
             state = await graph.ainvoke({"user_query": "我的回答。"}, config)
 
